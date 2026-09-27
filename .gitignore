@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+engine/.venv/
+engine/build/
+engine/dist/
+engine/*.spec
+engine/*.egg-info/
+
+# Node / UI
+app/node_modules/
+app/dist/
+app/test-results/
+app/playwright-report/
+app/.e2e-data/
+
+# Tauri
+app/src-tauri/target/
+app/src-tauri/gen/
+app/src-tauri/binaries/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.ruff_cache/

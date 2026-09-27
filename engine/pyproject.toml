@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barnaby-engine"
+version = "1.0.0"
+description = "Local voice pipeline for driving Claude Code by speech"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "websockets>=15,<16",
+    "pydantic>=2.7,<3",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+voice = [
+    "sounddevice>=0.5",
+    "faster-whisper>=1.1",
+    "kokoro>=0.9.4",
+    "soundfile>=0.12",
+    # Kokoro's English G2P (misaki) otherwise shells out to `pip install` this
+    # model on first load, inside the running engine. Pin it here instead.
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+dev = ["ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+barnaby-engine = "barnaby_engine.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["barnaby_engine*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
