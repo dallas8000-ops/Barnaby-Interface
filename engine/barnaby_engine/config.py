@@ -60,6 +60,28 @@ class Config:
     save_voice_samples: bool = False     # opt-in: keep audio+corrected text for fine-tuning
     safe_bash: list[str] = field(default_factory=lambda: list(DEFAULT_SAFE_BASH))
     turn_timeout_s: int = 900
+    
+    # Wake word settings
+    wake_word_enabled: bool = False
+    wake_word_keyword: str = "Barnaby"
+    wake_word_sensitivity: float = 0.5  # 0.0 to 1.0
+    
+    # Continuous mode settings
+    continuous_mode_enabled: bool = False
+    continuous_mode_timeout: float = 2.0  # seconds of silence
+    
+    # Command chaining settings
+    command_chain_enabled: bool = True
+    command_chain_max_depth: int = 5
+    
+    # IDE bridge settings
+    ide_bridge_enabled: bool = False
+    ide_bridge_port: int = 8765
+    
+    # Workflow settings
+    workflows_enabled: bool = True
+    workflows_directory: str = "%APPDATA%\\Barnaby\\workflows"
+    macro_recording_enabled: bool = True
 
     # Keys the UI is allowed to change. safe_bash is deliberately excluded:
     # widening the auto-approve list must be a conscious edit of config.json,
@@ -104,6 +126,25 @@ class Config:
         d.pop("claude_bin", None)
         d.pop("cursor_bin", None)
         return d
+
+
+def validate_config(config: Config) -> list[str]:
+    """Validate configuration and return list of error messages."""
+    errors = []
+    
+    if not 0.0 <= config.wake_word_sensitivity <= 1.0:
+        errors.append("wake_word_sensitivity must be between 0.0 and 1.0")
+    
+    if config.continuous_mode_timeout < 0.5:
+        errors.append("continuous_mode_timeout must be at least 0.5 seconds")
+    
+    if config.command_chain_max_depth < 1 or config.command_chain_max_depth > 20:
+        errors.append("command_chain_max_depth must be between 1 and 20")
+    
+    if config.ide_bridge_port < 1024 or config.ide_bridge_port > 65535:
+        errors.append("ide_bridge_port must be between 1024 and 65535")
+    
+    return errors
 
 
 def _is_int(v: Any) -> bool:
