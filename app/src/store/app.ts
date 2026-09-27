@@ -74,6 +74,21 @@ export interface AppState {
   toasts: Toast[];
   voiceProfile: VoiceProfileView | null;
   devices: { index: number; name: string; default: boolean }[];
+  
+  // Voice features
+  wakeWordActive: boolean;
+  continuousMode: boolean;
+  commandChainActive: boolean;
+  commandChainDepth: number;
+  
+  // IDE bridge
+  ideConnected: boolean;
+  ideType: "vscode" | "cursor" | "claude-desktop" | null;
+  
+  // Workflows
+  workflowActive: boolean;
+  currentWorkflow: string | null;
+  macroRecording: boolean;
 }
 
 export const initialState: AppState = {
@@ -92,6 +107,21 @@ export const initialState: AppState = {
   toasts: [],
   voiceProfile: null,
   devices: [],
+  
+  // Voice features
+  wakeWordActive: false,
+  continuousMode: false,
+  commandChainActive: false,
+  commandChainDepth: 0,
+  
+  // IDE bridge
+  ideConnected: false,
+  ideType: null,
+  
+  // Workflows
+  workflowActive: false,
+  currentWorkflow: null,
+  macroRecording: false,
 };
 
 let toastSeq = 0;
@@ -226,20 +256,29 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, toasts: toast(s, "error", e.message) };
     case "pong":
       return s;
-    // Voice feature events (no-op for now, will be implemented in later tasks)
+    // Voice feature events
     case "wake_word_detected":
+      return { ...s, wakeWordActive: true };
     case "continuous_mode_changed":
+      return { ...s, continuousMode: e.active };
     case "command_chain_start":
+      return { ...s, commandChainActive: true, commandChainDepth: 0 };
     case "command_chain_end":
-    // IDE bridge events (no-op for now, will be implemented in later tasks)
+      return { ...s, commandChainActive: false, commandChainDepth: 0 };
+    // IDE bridge events
     case "ide_connected":
+      return { ...s, ideConnected: true, ideType: e.ide_type };
     case "ide_context_update":
-    // Workflow events (no-op for now, will be implemented in later tasks)
-    case "workflow_started":
-    case "workflow_step_complete":
-    case "workflow_error":
-    case "macro_recorded":
       return s;
+    // Workflow events
+    case "workflow_started":
+      return { ...s, workflowActive: true, currentWorkflow: e.workflow_name };
+    case "workflow_step_complete":
+      return s;
+    case "workflow_error":
+      return { ...s, workflowActive: false, currentWorkflow: null };
+    case "macro_recorded":
+      return { ...s, macroRecording: false };
   }
 }
 
