@@ -287,6 +287,8 @@ interface Actions {
   setConnection: (c: ConnectionStatus) => void;
   dismissToast: (id: number) => void;
   setDraftText: (text: string) => void;
+  toggleWakeWord: () => void;
+  toggleContinuousMode: () => void;
 }
 
 export const useApp = create<AppState & Actions>()((set) => ({
@@ -295,4 +297,6 @@ export const useApp = create<AppState & Actions>()((set) => ({
   setConnection: (connection) => set({ connection }),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setDraftText: (text) => set((s) => (s.draft ? { draft: { ...s.draft, text } } : {})),
+  toggleWakeWord: () => set((s) => ({ wakeWordActive: !s.wakeWordActive })),
+  toggleContinuousMode: () => set((s) => ({ continuousMode: !s.continuousMode })),
 }));
