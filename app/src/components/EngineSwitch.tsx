@@ -2,7 +2,7 @@ import { send } from "../lib/client";
 import type { AgentEngine } from "../lib/protocol";
 import { useApp } from "../store/app";
 
-export const ENGINE_LABEL: Record<AgentEngine, string> = { claude: "Claude", cursor: "Cursor" };
+export const ENGINE_LABEL: Record<AgentEngine, string> = { claude: "Claude", cursor: "Cursor", devin: "Devin" };
 
 /**
  * Which coding agent runs the next instruction. Switching starts a fresh

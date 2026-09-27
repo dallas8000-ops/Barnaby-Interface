@@ -1,6 +1,6 @@
 # Barnaby
 
-A desktop voice interface for Claude Code and Cursor. Hold a key, say what you want done in your project, and Barnaby transcribes it locally, runs it through Claude Code in that folder, shows every command and file edit as it happens, and reads the outcome back to you. Anything that changes state outside the project, or can't be undone, waits for your approval.
+A desktop voice interface for Claude Code, Cursor and Devin. Hold a key, say what you want done in your project, and Barnaby transcribes it locally, runs it through Claude Code in that folder, shows every command and file edit as it happens, and reads the outcome back to you. Anything that changes state outside the project, or can't be undone, waits for your approval.
 
 ```
  ┌──────────────── Tauri shell (Rust) ────────────────┐
@@ -52,9 +52,9 @@ On first launch, pick your project folder. The speech models (about 250 MB) down
 | Run a template | "Run the TDD template for the cart total", or the **Templates** button |
 | Open a touched file | **Open in VS Code** / **Open in Cursor** on any file strip |
 
-## Agents: Claude and Cursor
+## Agents: Claude, Cursor and Devin
 
-The switch under the instruction box picks which coding agent runs the next instruction. You can also say it: "Cursor, fix the build", "have Claude run the tests", or just "use Cursor". Each session belongs to the agent that started it (a Claude session can't be resumed by Cursor), so switching starts a new session and clears pending approvals. Reopening an old session switches back to its agent.
+The switch under the instruction box picks which coding agent runs the next instruction. You can also say it: "Cursor, fix the build", "have Claude run the tests", "Devin, add a health check", or just "use Cursor". Each session belongs to the agent that started it (a Claude session can't be resumed by Cursor), so switching starts a new session and clears pending approvals. Reopening an old session switches back to its agent.
 
 Cursor needs its command-line agent, installed and signed in once:
 
@@ -70,6 +70,17 @@ agent login
 - **File edits are not restricted by Cursor.** In headless mode, Cursor ignored both `Write()` scopes and explicit `deny` rules, and its `--sandbox` option isn't available on Windows. Barnaby's guard watches every Cursor tool call as it starts, and stops the turn immediately if Cursor reads or edits a file outside the project, or runs a command that goes beyond your rules.
 - **The trade-off.** Because the guard reacts to Cursor's own "tool started" event, it can't promise the first out-of-project write never lands: it stops Cursor at that point, not before. Claude Code, by contrast, refuses such an edit before it happens. For work that touches files outside the project folder, use Claude.
 - **Cost.** Cursor bills against your Cursor plan and reports no per-turn cost, so Cursor turns show none.
+
+### Devin
+
+Devin works differently from the other two. It runs in Devin's cloud on its own machine, against repositories you've connected in Devin, **not on the files on this PC**. A Devin turn starts a Devin session (later turns in the same Barnaby session message that same Devin session), then Barnaby checks it every few seconds and streams each of Devin's messages into the conversation and reads it aloud. The Activity panel shows a card linking to the session in Devin.
+
+- **Your key.** Devin's API needs a key: a personal key (`apk_user_…`) works with the v1 API Barnaby uses. Paste it into **Settings → Devin API key**. It's saved in **Windows Credential Manager** as `Barnaby-devin`, never in `config.json`, logs or the session history, and the UI never receives it back, only whether one is saved. You can also save it from PowerShell without opening Barnaby: copy the key, then run `.\scripts\set-secret.ps1 devin`. Remove it from Settings, or from Control Panel → Credential Manager.
+- **When a turn ends.** When Devin is *blocked* (waiting for you: its last message is the question, so just answer) or *finished*. If Devin is still going after 30 minutes, Barnaby stops watching and says where to follow it; Devin keeps working.
+- **Stop.** Devin's v1 API has no documented way to end a session, so Stop ends Barnaby's turn but Devin's session keeps running in the cloud. Barnaby says so. End it in Devin if you need to.
+- **Which repository.** A new Devin session is told your project's `origin` remote, with any credentials embedded in the URL (`https://user:token@…`) stripped first, so a token in a remote never reaches Devin.
+- **No approvals.** Devin's actions happen on Devin's machine under Devin's own controls, so Barnaby's per-command approval cards don't apply to Devin turns.
+- **Cost.** Devin bills in ACUs against your Devin plan and the API reports no per-turn cost, so Devin turns show none.
 
 ## Hands-free mode
 
@@ -111,6 +122,7 @@ A malformed file is skipped with a log line and doesn't hide the others.
 - **The UI can't widen permissions.** `set_config` only accepts whitelisted keys, so the auto-approve list and the Claude binary path are editable only in `%APPDATA%\Barnaby\config.json`.
 - **IDE bridge (not started by default).** Any request with a browser `Origin` is refused, and the first frame must carry a secret token, compared in constant time. The port and token are published in an owner-only `ide-bridge.json` in the data directory, for extensions to read. Only authenticated clients receive events.
 - **Editor launch.** File paths must resolve inside the project, and paths with `cmd.exe` metacharacters are refused, because `code.cmd` / `cursor.cmd` re-parse argv too.
+- **Cloud agent keys.** Stored only in Windows Credential Manager. The engine reads the key for each Devin request and sends it only in the `Authorization` header, over HTTPS, to Devin's fixed API host. The `set_secret` command carries the key as a pydantic `SecretStr`, so it never shows up in a log or validation message, and no event ever contains it.
 - **Speech hygiene.** API keys, tokens, JWTs, private keys and `password=` values are redacted before anything is spoken aloud.
 - **Webview.** Strict CSP (`script-src 'self'`, connections only to `ws://127.0.0.1`). Model output can't navigate the window, links open in your browser (http/https only), remote images are dropped, and Tauri capabilities are limited to events, the folder picker and opening URLs.
 
@@ -129,9 +141,9 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 219 tests
-cd app;    npm run typecheck; npm test                                   # 41 tests
-.\scripts\e2e.ps1                     # 8 E2E flows against the real engine in --mock mode
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 259 tests
+cd app;    npm run typecheck; npm test                                   # 45 tests
+.\scripts\e2e.ps1                     # 9 E2E flows against the real engine in --mock mode
 ```
 
 The engine suite drives the real subprocess path with a fake `claude` executable. It checks that the prompt arrives on stdin and not in argv, that the settings file is scoped and deleted, that tree-kill works on cancel, that 200 KB stream lines are handled, and that a missing result surfaces stderr. The stream parser is pinned to a fixture captured from real `claude -p --output-format stream-json` output. CI runs all of it on Windows and Ubuntu (`.github/workflows/ci.yml`).
@@ -157,6 +169,5 @@ With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `s
 
 Next:
 - Codex as a third engine: the adapter can be built from Codex's documented `codex exec --json` format, but it's waiting on a Codex run that isn't blocked by the account's ChatGPT usage limit, so the parser can be pinned to real output.
-- A Devin hand-off command: dispatch a task through Devin's API and show completion in the activity panel.
 - Configurable global hotkey.
 - Whisper fine-tuning script over the saved voice samples.

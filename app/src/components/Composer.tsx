@@ -131,7 +131,7 @@ export function Composer() {
           <TemplatePicker />
           <HandsFreeToggle />
         </div>
-        <p className="hidden text-xs text-muted lg:block">Chain steps with “then”. Switch agents with “Cursor, …”.</p>
+        <p className="hidden text-xs text-muted lg:block">Chain steps with “then”. Switch agents with “Cursor, …” or “Devin, …”.</p>
       </div>
     </form>
   );

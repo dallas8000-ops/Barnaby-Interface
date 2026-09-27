@@ -7,6 +7,7 @@ import type {
   Correction,
   EngineEvent,
   EngineInfo,
+  SecretName,
   EngineState,
   Risk,
   SessionSummary,
@@ -74,6 +75,7 @@ export interface AppState {
   components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
   config: Config | null;
   engines: EngineInfo[];
+  secrets: Record<SecretName, boolean>;
   sessions: SessionSummary[];
   sessionId: string | null;
   turns: Turn[];
@@ -109,6 +111,7 @@ export const initialState: AppState = {
   components: { stt: { status: "loading" }, tts: { status: "loading" } },
   config: null,
   engines: [{ name: "claude", available: true }],
+  secrets: { devin: false },
   sessions: [],
   sessionId: null,
   turns: [],
@@ -164,6 +167,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         engines: e.engines ?? s.engines,
         templates: e.templates ?? s.templates,
         continuousMode: e.handsfree ?? s.continuousMode,
+        secrets: e.secrets ?? s.secrets,
         sessions: e.sessions,
         speaking: e.speaking,
         components: e.components ?? s.components,
@@ -263,6 +267,10 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, toasts: toast(s, "learned", `Learned: “${e.heard}” means ${e.meant}`) };
     case "devices":
       return { ...s, devices: e.items };
+    case "secrets":
+      return { ...s, secrets: e.items };
+    case "engines":
+      return { ...s, engines: e.items };
     case "notice":
       return { ...s, toasts: toast(s, "info", e.message) };
     case "error":

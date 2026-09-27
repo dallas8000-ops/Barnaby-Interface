@@ -24,6 +24,8 @@ from . import __version__
 from .adaptive import VoiceProfile
 from .agent import AgentError, ClaudeCodeAgent, resolve_claude
 from .cursor_agent import CursorAgent, resolve_cursor
+from .devin_agent import DevinAgent, DevinClient
+from .vault import MemoryCredentials, Vault, VaultError
 from .config import resolve_workflows_dir, Config, data_dir
 from .orchestrator import Orchestrator
 from .server import Bridge, allowed_origins_from_env
@@ -35,6 +37,10 @@ from .ide_bridge import IdeBridge
 from .workflows import WorkflowEngine
 from .macro_recorder import MacroRecorder
 from .templates import TemplateManager
+
+
+log = logging.getLogger(__name__)
+DEVIN_NEEDS_KEY = "Add your Devin API key in Settings → Devin first."
 
 
 def _setup_logging() -> None:
@@ -96,15 +102,27 @@ async def amain(args: argparse.Namespace) -> None:
     template_manager = TemplateManager()
 
     if args.mock:
-        from .mock import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
+        from .mock import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent, devin_demo_script
         recorder, transcriber, speaker = FakeRecorder(), FakeTranscriber(), FakeSpeaker(delay=0.4)
-        agents = {"claude": ScriptedAgent(step_delay=0.35), "cursor": ScriptedAgent(step_delay=0.35)}
-        available = lambda name: None  # noqa: E731
+        vault = Vault(MemoryCredentials())  # never touch the real Credential Manager in mock runs
+        agents = {"claude": ScriptedAgent(step_delay=0.35), "cursor": ScriptedAgent(step_delay=0.35),
+                  "devin": ScriptedAgent(step_delay=0.35, default=devin_demo_script)}
+
+        def available(name: str) -> str | None:
+            return DEVIN_NEEDS_KEY if name == "devin" and not vault.has("devin") else None
         tfactory = sfactory = None
         if not config.workspace:
             config.workspace = str(data_dir())
     else:
         from .voice import KokoroSpeaker, MicRecorder, WhisperTranscriber
+        vault = Vault()
+
+        def devin_key() -> str | None:
+            try:
+                return vault.get("devin")
+            except VaultError as exc:
+                log.warning("%s", exc)
+                return None
         recorder = MicRecorder(config.input_device)
         tfactory = lambda c: WhisperTranscriber(c.whisper_model, c.whisper_device)  # noqa: E731
         sfactory = lambda c: KokoroSpeaker(c.tts_voice, c.tts_speed)  # noqa: E731
@@ -116,6 +134,7 @@ async def amain(args: argparse.Namespace) -> None:
             "cursor": CursorAgent(config_dir=data_dir() / "cursor", cursor_bin=config.cursor_bin,
                                   model=config.cursor_model, safe_bash=config.safe_bash,
                                   timeout_s=config.turn_timeout_s, scratch_dir=data_dir() / "run"),
+            "devin": DevinAgent(DevinClient(devin_key)),
         }
 
         def available(name: str) -> str | None:
@@ -124,6 +143,8 @@ async def amain(args: argparse.Namespace) -> None:
                     resolve_claude(config.claude_bin)
                 elif name == "cursor":
                     resolve_cursor(config.cursor_bin)
+                elif name == "devin" and not vault.has("devin"):
+                    return DEVIN_NEEDS_KEY
             except AgentError as exc:
                 return str(exc)
             return None
@@ -132,7 +153,7 @@ async def amain(args: argparse.Namespace) -> None:
                         transcriber=transcriber, speaker=speaker, agents=agents, engine_available=available,
                         templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
-                        transcriber_factory=tfactory, speaker_factory=sfactory)
+                        transcriber_factory=tfactory, speaker_factory=sfactory, vault=vault)
     bridge.orchestrator = orch
 
     server = await bridge.serve(port=args.port)

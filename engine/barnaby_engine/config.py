@@ -46,7 +46,7 @@ class Config:
     workspace: str = ""                  # project folder the agent works in
     claude_bin: str = ""                 # override path to claude executable
     claude_model: str = ""               # e.g. "opus", "sonnet"; empty = CLI default
-    engine: str = "claude"               # which coding agent runs turns: claude | cursor
+    engine: str = "claude"               # which coding agent runs turns: claude | cursor | devin
     cursor_bin: str = ""                 # override path to Cursor's CLI (node entry or binary)
     cursor_model: str = ""               # Cursor model id; empty = Cursor's default ("Auto")
     whisper_model: str = "small.en"
@@ -173,7 +173,7 @@ def _short_str(v: Any, limit: int = 64) -> bool:
 _VALIDATORS: dict[str, Any] = {
     "workspace": lambda v: isinstance(v, str) and (v == "" or Path(v).is_dir()),
     "claude_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._[]" for c in v),
-    "engine": lambda v: v in {"claude", "cursor"},
+    "engine": lambda v: v in {"claude", "cursor", "devin"},
     "continuous_mode_enabled": lambda v: isinstance(v, bool),
     "continuous_mode_timeout": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.6 <= v <= 5.0,
     "cursor_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._" for c in v),

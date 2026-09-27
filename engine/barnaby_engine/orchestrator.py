@@ -37,7 +37,7 @@ from .editors import EditorError, open_in_editor
 from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft,
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
                        ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
-                       SetConfig, State, StopSpeaking, TextSubmit, UpdateCorrection,
+                       DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TextSubmit, UpdateCorrection,
                        ev, ev_error, ev_state,
                        ev_wake_word_detected, ev_continuous_mode_changed,
                        ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
@@ -51,6 +51,7 @@ from .safety import Grant, assess, grant_for
 from .speech import SpeechComposer
 from .store import Store
 from .templates import TemplateManager, match_template, template_steps
+from .vault import MemoryCredentials, Vault, VaultError
 from .voice import STT_RATE, Recorder, Speaker, Transcriber, list_input_devices, resample
 
 log = logging.getLogger(__name__)
@@ -66,11 +67,12 @@ _NO_CORE = frozenset({"no", "nope", "deny", "denied", "don't", "dont", "reject",
 _FILLER = frozenset({"go", "do", "it", "please", "ok", "okay", "that", "sure", "thanks", "and", "just"})
 
 
-ENGINE_LABELS = {"claude": "Claude", "cursor": "Cursor"}
-_ENGINE_WORDS = {"claude": "claude", "clod": "claude", "cloud": "claude", "cursor": "cursor", "curser": "cursor"}
+ENGINE_LABELS = {"claude": "Claude", "cursor": "Cursor", "devin": "Devin"}
+_ENGINE_WORDS = {"claude": "claude", "clod": "claude", "cloud": "claude", "cursor": "cursor", "curser": "cursor",
+                 "devin": "devin", "devon": "devin", "deven": "devin"}
 _ROUTE_RE = re.compile(
     r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:(?:have|ask|use|let|get|tell)\s+)?"
-    r"(claude|clod|cloud|cursor|curser)\b(?:\s*[,:.\-]\s*|\s+(?:to\s+)?|\s*$)(.*)$",
+    r"(claude|clod|cloud|cursor|curser|devin|devon|deven)\b(?:\s*[,:.\-]\s*|\s+(?:to\s+)?|\s*$)(.*)$",
     re.IGNORECASE | re.DOTALL)
 
 
@@ -192,6 +194,8 @@ def tool_summary(name: str, tool_input: dict[str, Any], workspace: str) -> tuple
         return f"Subagent: {tool_input.get('description', '')}"[:200], None
     if name == "TodoWrite":
         return "Update task list", None
+    if name == "Devin":
+        return f"Devin session {tool_input.get('url') or tool_input.get('session_id', '')}".strip()[:300], None
     return name, rel
 
 
@@ -204,7 +208,8 @@ class Orchestrator:
                  templates: TemplateManager | None = None,
                  workflows: Any = None,
                  transcriber_factory: Callable[[Config], Transcriber] | None = None,
-                 speaker_factory: Callable[[Config], Speaker] | None = None) -> None:
+                 speaker_factory: Callable[[Config], Speaker] | None = None,
+                 vault: Vault | None = None) -> None:
         self.config = config
         self.store = store
         self.profile = profile
@@ -225,6 +230,8 @@ class Orchestrator:
         self.emit = emit
         self._transcriber_factory = transcriber_factory
         self._speaker_factory = speaker_factory
+        # Cloud agents' API keys. Tests get an in-memory vault, never the real Windows store.
+        self.vault = vault or Vault(MemoryCredentials())
 
         self.state = State.IDLE
         self.session_id: str | None = None
@@ -270,7 +277,7 @@ class Orchestrator:
 
     async def hello(self) -> dict[str, Any]:
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
-                  templates=self._template_summaries(), handsfree=self._hf is not None,
+                  templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components)
 
@@ -355,6 +362,10 @@ class Orchestrator:
                     open_in_editor(editor, self.config.workspace, path, line)
                 except EditorError as exc:
                     await self.emit(ev_error("editor", str(exc)))
+            case SetSecret(name=name, value=value):
+                await self._set_secret(name, value.get_secret_value())
+            case DeleteSecret(name=name):
+                await self._set_secret(name, None)
             case ListDevices():
                 devices = await asyncio.get_running_loop().run_in_executor(None, list_input_devices)
                 await self.emit(ev("devices", items=devices))
@@ -957,6 +968,25 @@ class Orchestrator:
             agent = self.agents.get(name)
             if agent is not None and hasattr(agent, "model"):
                 agent.model = model  # type: ignore[attr-defined]
+
+    async def _set_secret(self, name: str, value: str | None) -> None:
+        """Save or remove a key. Only the outcome is reported, never the value."""
+        loop = asyncio.get_running_loop()
+        try:
+            if value is None:
+                await loop.run_in_executor(None, self.vault.delete, name)
+            else:
+                await loop.run_in_executor(None, self.vault.set, name, value)
+        except VaultError as exc:
+            await self.emit(ev_error("secret", str(exc)))
+            return
+        label = ENGINE_LABELS.get(name, name)
+        await self.emit(ev("notice", message=f"{label} key saved to Windows Credential Manager." if value is not None
+                           else f"{label} key removed."))
+        await self.emit(ev("secrets", items=self.vault.status()))
+        await self.emit(ev("engines", items=self.engines()))
+        if value is None and self.config.engine == name:
+            await self._set_config({"engine": "claude"})
 
     async def _switch_engine(self, engine: str) -> bool:
         reason = self._engine_available(engine)

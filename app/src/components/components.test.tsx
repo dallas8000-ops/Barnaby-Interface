@@ -16,6 +16,7 @@ import { initialState, useApp, type Approval } from "../store/app";
 import { ApprovalCard } from "./Approvals";
 import { Composer } from "./Composer";
 import { ChainProgress } from "./ChainProgress";
+import { DevinKeyField } from "./DevinKeyField";
 import { EngineSwitch } from "./EngineSwitch";
 import { HandsFreeToggle } from "./HandsFreeToggle";
 import { ScopeConsole } from "./ScopeConsole";
@@ -340,5 +341,50 @@ describe("SettingsDialog microphone", () => {
     expect(sent).toContainEqual({ type: "list_devices" });
     fireEvent.change(mic, { target: { value: "2" } });
     expect(sent).toContainEqual({ type: "set_config", values: { input_device: 2 } });
+  });
+});
+
+describe("DevinKeyField", () => {
+  const KEY = "apk_user_" + "Ab3/+=".repeat(10);
+
+  it("sends a valid key once, trimmed, and clears it from the field", async () => {
+    render(<DevinKeyField />);
+    const input = screen.getByPlaceholderText("apk_user_…") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    const save = screen.getByRole("button", { name: "Save" });
+    await userEvent.type(input, "not a key");
+    expect(save).toBeDisabled();
+    expect(screen.getByText(/doesn't look like an API key/)).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: `  ${KEY}\n` } });
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    expect(sent).toEqual([{ type: "set_secret", name: "devin", value: KEY }]);
+    expect(input.value).toBe("");
+  });
+
+  it("when saved, shows status only and can remove or replace", async () => {
+    useApp.setState({ secrets: { devin: true } });
+    render(<DevinKeyField />);
+    expect(screen.getByRole("status")).toHaveTextContent("Saved in Windows Credential Manager");
+    expect(screen.queryByPlaceholderText("apk_user_…")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(sent).toEqual([{ type: "delete_secret", name: "devin" }]);
+    await userEvent.click(screen.getByRole("button", { name: "Replace" }));
+    expect(screen.getByPlaceholderText("apk_user_…")).toBeInTheDocument();
+  });
+});
+
+describe("EngineSwitch with Devin", () => {
+  it("shows Devin, disabled with the reason until a key is saved", () => {
+    useApp.setState({
+      engines: [
+        { name: "claude", available: true },
+        { name: "devin", available: false, reason: "Add your Devin API key in Settings → Devin first." },
+      ],
+    });
+    render(<EngineSwitch />);
+    const devin = screen.getByRole("radio", { name: "Devin" });
+    expect(devin).toBeDisabled();
+    expect(devin).toHaveAttribute("title", expect.stringContaining("Settings → Devin"));
   });
 });

@@ -13,7 +13,8 @@ export type EngineState =
 export type Risk = "normal" | "high" | "critical";
 export type ComponentStatus = "loading" | "ready" | "error";
 export type Editor = "vscode" | "cursor";
-export type AgentEngine = "claude" | "cursor";
+export type AgentEngine = "claude" | "cursor" | "devin";
+export type SecretName = "devin";
 
 export interface EngineInfo {
   name: AgentEngine;
@@ -86,6 +87,7 @@ export type EngineEvent =
       engines?: EngineInfo[];
       templates?: TemplateSummary[];
       handsfree?: boolean;
+      secrets?: Record<SecretName, boolean>;
       session_id: string | null;
       speaking: boolean;
       sessions: SessionSummary[];
@@ -111,6 +113,8 @@ export type EngineEvent =
   | { type: "voice_profile"; corrections: Correction[]; vocabulary: string[]; project_terms: string[]; samples: number }
   | { type: "learned"; heard: string; meant: string }
   | { type: "devices"; items: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[] }
+  | { type: "secrets"; items: Record<SecretName, boolean> }
+  | { type: "engines"; items: EngineInfo[] }
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; t: number }
@@ -152,4 +156,7 @@ export type Command =
   | { type: "list_devices" }
   | { type: "list_templates" }
   | { type: "run_template"; template_id: string; context?: string | null }
+  // The key goes to the engine once and is never sent back: only whether one is saved.
+  | { type: "set_secret"; name: SecretName; value: string }
+  | { type: "delete_secret"; name: SecretName }
   | { type: "ping" };

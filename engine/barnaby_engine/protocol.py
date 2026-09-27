@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter
 
 PROTOCOL_VERSION = 1
 
@@ -136,12 +136,26 @@ class RunTemplate(_Cmd):
     context: str | None = Field(default=None, max_length=2_000)  # what to apply it to
 
 
+class SetSecret(_Cmd):
+    """Save a cloud agent's API key to Windows Credential Manager. SecretStr keeps
+    the value out of reprs, logs and validation-error messages; the engine never
+    sends it back, only whether one is saved."""
+    type: Literal["set_secret"]
+    name: Literal["devin"]
+    value: SecretStr = Field(min_length=1, max_length=600)
+
+
+class DeleteSecret(_Cmd):
+    type: Literal["delete_secret"]
+    name: Literal["devin"]
+
+
 Command = Annotated[
     Union[
         Auth, PttStart, PttStop, TextSubmit, Cancel, StopSpeaking, Approve, Deny,
         NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
-        ListTemplates, RunTemplate,
+        ListTemplates, RunTemplate, SetSecret, DeleteSecret,
     ],
     Field(discriminator="type"),
 ]

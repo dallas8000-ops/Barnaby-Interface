@@ -88,8 +88,10 @@ class ScriptedAgent:
     """Replays scripted turns. Each script is a list of AgentEvents, or a
     callable (prompt, grant) -> list[AgentEvent]."""
 
-    def __init__(self, scripts: list[Any] | None = None, step_delay: float = 0.0) -> None:
+    def __init__(self, scripts: list[Any] | None = None, step_delay: float = 0.0,
+                 default: Callable[[str, Grant | None], list[AgentEvent]] | None = None) -> None:
         self.scripts = list(scripts or [])
+        self.default = default
         self.step_delay = step_delay
         self.calls: list[dict[str, Any]] = []
         self.cancelled = 0
@@ -99,7 +101,7 @@ class ScriptedAgent:
                   grant: Grant | None) -> AsyncIterator[AgentEvent]:
         self.calls.append({"prompt": prompt, "session_id": session_id, "grant": grant, "workspace": workspace})
         self._cancel = asyncio.Event()
-        script = self.scripts.pop(0) if self.scripts else demo_script
+        script = self.scripts.pop(0) if self.scripts else (self.default or demo_script)
         events = script(prompt, grant) if callable(script) else script
         for event in events:
             if self._cancel.is_set():
@@ -154,3 +156,18 @@ def demo_script(prompt: str, grant: Grant | None) -> list[AgentEvent]:
             Denial("t5", "Bash", {"command": "git push origin main", "description": "Push the fix to origin/main"}),
         )),
     ]
+
+
+MOCK_DEVIN_SESSION = "devin-mock0000000000000000000000000000"
+
+
+def devin_demo_script(prompt: str, grant: Grant | None) -> list[AgentEvent]:
+    """What a Devin turn looks like to the orchestrator: a session card, Devin's messages, a result."""
+    url = "https://app.devin.ai/sessions/mock"
+    first = "I've started on it in my cloud workspace and cloned the repository."
+    second = "Done. I opened a pull request with the change and passing tests."
+    return [SessionStarted(MOCK_DEVIN_SESSION, None),
+            ToolStart("devin-session", "Devin", {"session_id": MOCK_DEVIN_SESSION, "url": url}),
+            TextDelta(first + "\n\n"), TextDelta(second + "\n\n"),
+            ToolEnd("devin-session", True, url),
+            TurnResult(f"{first}\n\n{second}", MOCK_DEVIN_SESSION, False, None, 1200)]

@@ -3,6 +3,7 @@ import { send } from "../lib/client";
 import { pickFolder } from "../lib/platform";
 import type { Config } from "../lib/protocol";
 import { useApp } from "../store/app";
+import { DevinKeyField } from "./DevinKeyField";
 import { Modal } from "./Modal";
 
 const VOICES: { id: string; label: string }[] = [
@@ -120,6 +121,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             placeholder="Auto"
             onBlur={(e) => e.target.value !== config.cursor_model && set({ cursor_model: e.target.value.trim() })}
           />
+        </Field>
+        <Field label="Devin API key" htmlFor="devin-key">
+          <DevinKeyField />
         </Field>
       </section>
 

@@ -162,3 +162,36 @@ test("hands-free toggles on and off through the engine", async ({ page }) => {
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk");
 });
+
+test("Devin: key saved in Settings enables Devin, which runs a turn; removing the key disables it", async ({ page }) => {
+  await fresh(page);
+  const devin = page.getByRole("radio", { name: "Devin" });
+  await expect(devin).toBeDisabled();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const keyInput = dialog.getByPlaceholder("apk_user_…");
+  await expect(keyInput).toHaveAttribute("type", "password");
+  await keyInput.fill("apk_user_" + "e2eTestKey0".repeat(4));
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByText("Saved in Windows Credential Manager")).toBeVisible();
+  await expect(keyInput).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await expect(devin).toBeEnabled();
+  await page.getByLabel("Type an instruction").fill("Devin, add a health check endpoint");
+  await page.keyboard.press("Enter");
+  await expect(devin).toHaveAttribute("aria-checked", "true");
+  const convo = page.getByTestId("conversation");
+  await expect(convo.getByText(/opened a pull request/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("complementary", { name: "Activity" }).getByText("session https://app.devin.ai/sessions/mock")).toBeVisible();
+  await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk", { timeout: 15_000 });
+
+  // Clean up the shared engine: remove the key, which also switches back to Claude.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await dialog.getByRole("button", { name: "Remove" }).click();
+  await expect(dialog.getByPlaceholder("apk_user_…")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(devin).toBeDisabled();
+  await expect(page.getByRole("radio", { name: "Claude" })).toHaveAttribute("aria-checked", "true");
+});

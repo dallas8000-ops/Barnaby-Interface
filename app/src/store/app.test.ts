@@ -127,3 +127,12 @@ describe("reduceEvent", () => {
     expect(s.draftCommand).toEqual({ seq: 2, action: "send" });
   });
 });
+
+describe("secrets and engines events", () => {
+  it("tracks whether a key is saved and refreshes engine availability", () => {
+    let s = reduceEvent(initialState, { type: "secrets", items: { devin: true } });
+    expect(s.secrets).toEqual({ devin: true });
+    s = reduceEvent(s, { type: "engines", items: [{ name: "claude", available: true }, { name: "devin", available: true }] });
+    expect(s.engines.map((e) => e.name)).toEqual(["claude", "devin"]);
+  });
+});
