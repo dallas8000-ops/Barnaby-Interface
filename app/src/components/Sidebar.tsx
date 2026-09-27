@@ -2,9 +2,6 @@ import { AudioLines, FolderOpen, Plus, Settings } from "lucide-react";
 import { send } from "../lib/client";
 import { pickFolder } from "../lib/platform";
 import { useApp } from "../store/app";
-import { WakeWordStatus } from "./WakeWordStatus";
-import { ContinuousModeToggle } from "./ContinuousModeToggle";
-import { CommandChainIndicator } from "./CommandChainIndicator";
 
 const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
@@ -85,11 +82,6 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
       </ul>
 
       <div className="border-t border-line px-3 py-2">
-        <div className="mb-2 flex flex-col gap-2">
-          <WakeWordStatus />
-          <ContinuousModeToggle />
-          <CommandChainIndicator />
-        </div>
         <div className="flex gap-1">
           <button type="button" onClick={onProfile} className="inline-flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-panel hover:text-ink">
             <AudioLines size={15} aria-hidden /> Voice profile

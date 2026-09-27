@@ -91,3 +91,56 @@ class TemplateManager:
             del self._templates[template_id]
             return True
         return False
+
+
+# ------------------------------------------------------------------ voice matching
+import re as _re
+
+_TEMPLATE_RE = _re.compile(
+    r"^\s*(?:please\s+)?(?:run|start|use|do|begin|kick\s+off|launch)\s+"
+    r"(?:the\s+|a\s+|my\s+|our\s+)?(?P<name>.+?)\s+(?:template|workflow|checklist|routine|playbook)\b"
+    r"(?:\s*(?:on|for|with|against|to)\s+(?P<ctx>.+?))?\s*[.!]?\s*$",
+    _re.IGNORECASE,
+)
+_FILLER = {"cycle", "process", "flow", "the", "a", "my"}
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in _re.split(r"[^a-z0-9]+", text.lower()) if t]
+
+
+def match_template(text: str, templates: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None] | None:
+    """ "run the TDD template for the cart total" -> (tdd template, "the cart total").
+
+    Only an explicit "<verb> the <name> template|workflow|checklist" phrasing
+    counts, so ordinary instructions that merely mention a template ("update
+    the email template") are never hijacked. Spoken words match template name
+    or id words by prefix ("debug" ~ "debugging", "tdd" ~ "tdd-cycle").
+    """
+    m = _TEMPLATE_RE.match(text)
+    if not m:
+        return None
+    spoken = [t for t in _tokens(m.group("name")) if t not in _FILLER]
+    if not spoken:
+        return None
+    best: tuple[int, dict[str, Any]] | None = None
+    for tpl in templates:
+        words = set(_tokens(str(tpl.get("name", ""))) + _tokens(str(tpl.get("id", ""))))
+        if all(any(w.startswith(s) or s.startswith(w) for w in words) for s in spoken):
+            score = len(words)  # prefer the tightest match
+            if best is None or score < best[0]:
+                best = (score, tpl)
+    if best is None:
+        return None
+    ctx = (m.group("ctx") or "").strip() or None
+    return best[1], ctx
+
+
+def template_steps(template: dict[str, Any], limit: int = 12) -> list[str]:
+    """Instruction strings from a template or saved workflow, tolerating extra keys."""
+    steps = []
+    for step in template.get("steps") or []:
+        text = step.get("instruction") if isinstance(step, dict) else step
+        if isinstance(text, str) and text.strip():
+            steps.append(" ".join(text.split()))
+    return steps[:limit]

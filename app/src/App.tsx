@@ -3,6 +3,7 @@ import { client } from "./lib/client";
 import { onShellEvents } from "./lib/platform";
 import { useApp } from "./store/app";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { ChainProgress } from "./components/ChainProgress";
 import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { ScopeConsole } from "./components/ScopeConsole";
@@ -46,6 +47,7 @@ export function App() {
       <main className="flex min-h-0 min-w-0 flex-col">
         <Conversation />
         <div className="flex flex-col items-center gap-4 border-t border-line bg-bg px-4 pt-5 pb-4">
+          <ChainProgress />
           <ScopeConsole />
           <Composer />
         </div>

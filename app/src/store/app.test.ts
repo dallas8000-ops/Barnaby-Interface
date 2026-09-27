@@ -100,4 +100,19 @@ describe("reduceEvent", () => {
     });
     expect(loaded.turns[0]!.engine).toBe("cursor");
   });
+
+  it("tracks a chain through its steps and reports why it stopped", () => {
+    const s = run([
+      { type: "command_chain_start", chain_id: "c", steps: ["Lint", "Test"], name: null },
+      { type: "command_chain_step", chain_id: "c", index: 1, total: 2, text: "Test" },
+    ]);
+    expect(s.chain).toEqual({ id: "c", name: null, steps: ["Lint", "Test"], index: 1 });
+    const stale = reduceEvent(s, { type: "command_chain_step", chain_id: "old", index: 0, total: 1, text: "x" });
+    expect(stale.chain?.index).toBe(1);
+    const ended = reduceEvent(s, { type: "command_chain_end", chain_id: "c", success: false, reason: "declined", completed: 1, total: 2 });
+    expect(ended.chain).toBeNull();
+    expect(ended.toasts.at(-1)?.message).toBe("Stopped after step 2 of 2: you declined an action.");
+    const done = reduceEvent(s, { type: "command_chain_end", chain_id: "c", success: true, reason: "completed", completed: 2, total: 2 });
+    expect(done.toasts).toHaveLength(s.toasts.length);
+  });
 });

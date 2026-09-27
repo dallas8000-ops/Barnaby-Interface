@@ -36,18 +36,20 @@ from .config import Config, data_dir
 from .editors import EditorError, open_in_editor
 from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft,
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
-                       NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk,
+                       ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
                        SetConfig, State, StopSpeaking, TextSubmit, UpdateCorrection,
                        ev, ev_error, ev_state,
                        ev_wake_word_detected, ev_continuous_mode_changed,
-                       ev_command_chain_start, ev_command_chain_end,
+                       ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
                        ev_ide_connected, ev_ide_context_update,
                        ev_workflow_started, ev_workflow_step_complete,
                        ev_workflow_error, ev_macro_recorded)
+from .command_chain import split_chain
 from .cursor_agent import cursor_grantable
 from .safety import Grant, assess, grant_for
 from .speech import SpeechComposer
 from .store import Store
+from .templates import TemplateManager, match_template, template_steps
 from .voice import STT_RATE, Recorder, Speaker, Transcriber, list_input_devices
 
 log = logging.getLogger(__name__)
@@ -128,6 +130,18 @@ class PendingApproval:
 
 
 @dataclass
+class ChainRun:
+    """A multi-step request in flight: steps run as sequential turns in one session."""
+    id: str
+    steps: list[str]
+    name: str | None = None      # template/workflow name, if it came from one
+    context: str | None = None   # "for the cart total"
+    index: int = 0               # step currently running (0-based)
+    declined: bool = False       # user declined an approval during the current step
+    interrupted: bool = False    # the first step interrupted a running turn
+
+
+@dataclass
 class ApprovalGroup:
     items: dict[str, PendingApproval] = field(default_factory=dict)
 
@@ -167,6 +181,8 @@ class Orchestrator:
                  agent: Agent | None = None, emit: Emit,
                  agents: dict[str, Agent] | None = None,
                  engine_available: Callable[[str], str | None] | None = None,
+                 templates: TemplateManager | None = None,
+                 workflows: Any = None,
                  transcriber_factory: Callable[[Config], Transcriber] | None = None,
                  speaker_factory: Callable[[Config], Speaker] | None = None) -> None:
         self.config = config
@@ -183,6 +199,9 @@ class Orchestrator:
         # engine name -> None if usable, else a human reason (e.g. "not installed")
         self._engine_available = engine_available or (lambda name: None)
         self._running_agent: Agent | None = None
+        self._templates = templates or TemplateManager()
+        self._workflows = workflows  # WorkflowEngine: user-saved workflows run like templates
+        self._chain: ChainRun | None = None
         self.emit = emit
         self._transcriber_factory = transcriber_factory
         self._speaker_factory = speaker_factory
@@ -224,6 +243,7 @@ class Orchestrator:
 
     async def hello(self) -> dict[str, Any]:
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
+                  templates=self._template_summaries(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components)
 
@@ -287,6 +307,10 @@ class Orchestrator:
                 await self.emit(ev("sessions", items=self.store.list_sessions()))
             case SetConfig(values=values):
                 await self._set_config(values)
+            case ListTemplates():
+                await self.emit(ev("templates", items=self._template_summaries()))
+            case RunTemplate(template_id=tid, context=ctx):
+                await self._run_template(tid, ctx)
             case GetVoiceProfile():
                 await self._emit_voice_profile()
             case UpdateCorrection(heard=h, meant=m, action=action):
@@ -415,25 +439,128 @@ class Orchestrator:
                 await self.emit(ev("learned", heard=heard, meant=meant))
             if self.config.save_voice_samples:
                 self._save_sample(draft, text)
+        interrupting = await self._supersede()
+        tmatch = match_template(text, self._template_list())
+        if tmatch:
+            tpl, ctx = tmatch
+            await self._start_chain(template_steps(tpl), name=str(tpl.get("name") or tpl.get("id")),
+                                    context=ctx, interrupted=interrupting)
+            return
+        if self.config.command_chain_enabled:
+            steps = split_chain(text)
+            if len(steps) > 1:
+                limit = self.config.command_chain_max_depth
+                if len(steps) > limit:
+                    await self.emit(ev("notice", message=f"That's {len(steps)} steps; the limit is {limit}. "
+                                                         "Give me fewer steps at a time."))
+                    await self._set_state(State.IDLE)
+                    return
+                await self._start_chain(steps, interrupted=interrupting)
+                return
+        prompt = f"(The user interrupted your previous step.) {text}" if interrupting else text
+        await self._start_turn(prompt, display_text=text, grant=None)
+
+    async def _supersede(self) -> bool:
+        """A new instruction replaces whatever was in flight. Returns True if a turn was interrupted."""
+        await self._end_chain("interrupted")
         if self._approvals and not self._approvals.done():
             # A new instruction supersedes pending approvals: treat them as denied.
             self._approvals = None
             await self.emit(ev("approvals_cleared"))
-        interrupting = await self._cancel_turn()
-        prompt = f"(The user interrupted your previous step.) {text}" if interrupting else text
-        await self._start_turn(prompt, display_text=text, grant=None)
+        return await self._cancel_turn()
+
+    # ------------------------------------------------------------ chains & templates
+    def _template_list(self) -> list[dict[str, Any]]:
+        items = [dict(t) for t in self._templates.list_templates()]
+        if self._workflows is not None:
+            try:
+                for wf in self._workflows.list_workflows():
+                    items.append({"id": wf.id, "name": wf.name, "description": wf.description,
+                                  "steps": wf.steps, "custom": True})
+            except Exception:  # noqa: BLE001 - one bad file must not hide the built-ins
+                log.exception("could not load saved workflows")
+        return items
+
+    def _template_summaries(self) -> list[dict[str, Any]]:
+        return [{"id": t.get("id"), "name": t.get("name"), "description": t.get("description", ""),
+                 "step_count": len(template_steps(t)), "custom": bool(t.get("custom"))}
+                for t in self._template_list() if template_steps(t)]
+
+    async def _run_template(self, template_id: str, context: str | None) -> None:
+        tpl = next((t for t in self._template_list() if t.get("id") == template_id), None)
+        steps = template_steps(tpl) if tpl else []
+        if not steps:
+            await self.emit(ev_error("template", "That template wasn't found or has no steps."))
+            return
+        interrupting = await self._supersede()
+        await self._start_chain(steps, name=str(tpl.get("name") or template_id),
+                                context=(context or "").strip() or None, interrupted=interrupting)
+
+    async def _start_chain(self, steps: list[str], *, name: str | None = None, context: str | None = None,
+                           interrupted: bool = False) -> None:
+        chain = ChainRun(id=uuid.uuid4().hex[:12], steps=list(steps), name=name, context=context,
+                         interrupted=interrupted)
+        self._chain = chain
+        await self.emit(ev_command_chain_start(chain.id, chain.steps, name))
+        await self._run_chain_step()
+
+    async def _run_chain_step(self) -> None:
+        chain = self._chain
+        if chain is None:
+            return
+        i, n = chain.index, len(chain.steps)
+        step = chain.steps[i]
+        label = f"the \"{chain.name}\" template" if chain.name else "a multi-step request"
+        applied = f", applied to: {chain.context}" if chain.context else ""
+        prefix = f"(Step {i + 1} of {n} of {label}{applied}. Do only this step now; the next step follows.)"
+        if i + 1 == n:
+            prefix = f"(Final step {i + 1} of {n} of {label}{applied}.)"
+        if i == 0 and chain.interrupted:
+            prefix = "(The user interrupted your previous step.) " + prefix
+        chain.declined = False
+        await self.emit(ev_command_chain_step(chain.id, i, n, step))
+        if not await self._start_turn(f"{prefix} {step}", display_text=step, grant=None):
+            await self._end_chain("failed")
+
+    async def _advance_chain(self, status: str) -> None:
+        chain = self._chain
+        if chain is None:
+            return
+        if status != "ok":
+            await self._end_chain("failed")
+        elif chain.declined:
+            await self._end_chain("declined")
+        elif chain.index + 1 >= len(chain.steps):
+            await self._end_chain("completed")
+        else:
+            chain.index += 1
+            await self._run_chain_step()
+
+    async def _end_chain(self, reason: str) -> None:
+        chain, self._chain = self._chain, None
+        if chain is None:
+            return
+        n = len(chain.steps)
+        done = n if reason == "completed" else chain.index
+        await self.emit(ev_command_chain_end(chain.id, reason == "completed", reason, done, n))
+        if reason == "completed":
+            self._enqueue_speech([f"All {n} steps are done."], self._speech_gen)
+        elif reason in ("failed", "declined"):
+            why = "you declined an action" if reason == "declined" else "that step didn't finish"
+            self._enqueue_speech([f"I stopped after step {chain.index + 1} of {n}, because {why}."],
+                                 self._speech_gen)
 
     async def _start_turn(self, prompt: str, *, display_text: str, grant: Grant | None,
-                          system_note: bool = False) -> None:
+                          system_note: bool = False) -> bool:
         if not self.config.workspace:
             await self.emit(ev_error("workspace", "Pick a project folder in Settings first."))
-            return
+            return False
         engine = self.config.engine if self.config.engine in self.agents else "claude"
         reason = self._engine_available(engine)
         if reason:
             await self.emit(ev_error("engine", reason))
             await self._set_state(State.IDLE)
-            return
+            return False
         if self.session_id is not None and self.session_engine not in (None, engine):
             # Sessions are engine-bound: a Claude session can't be resumed by Cursor.
             self.session_id = self.claude_session_id = None
@@ -447,6 +574,7 @@ class Orchestrator:
         await self.emit(ev("turn_start", turn_id=turn_id, text=display_text,
                            session_id=self.session_id, system=system_note, engine=engine))
         self._turn_task = asyncio.create_task(self._run_turn(turn_id, prompt, display_text, grant))
+        return True
 
     async def _run_turn(self, turn_id: str, prompt: str, display_text: str, grant: Grant | None) -> None:
         await self._set_state(State.THINKING)
@@ -516,9 +644,10 @@ class Orchestrator:
         self._persist(display_text, text, tools, status, result.cost_usd if result else None)
 
         if needs_approval and result:
-            await self._open_approvals(turn_id, result)
+            await self._open_approvals(turn_id, result)  # a chain stays paused until the decision
         else:
             await self._set_state(State.IDLE)
+            await self._advance_chain(status)
 
     def _persist(self, user_text: str, assistant_text: str, tools: list[dict[str, Any]],
                  status: str, cost: float | None) -> None:
@@ -542,6 +671,7 @@ class Orchestrator:
         return True
 
     async def _cancel_all(self) -> None:
+        await self._end_chain("cancelled")
         if self._recording:
             self._recording = False
             self.recorder.abort()
@@ -603,6 +733,8 @@ class Orchestrator:
         self._approvals = None
         approved = [p for p in group.items.values() if p.decision]
         denied = [p for p in group.items.values() if not p.decision]
+        if denied and self._chain is not None:
+            self._chain.declined = True  # finish this step's reply, then stop the chain
         grant = Grant(
             allow=tuple(r for p in approved if p.grant for r in p.grant.allow),
             add_dirs=tuple(d for p in approved if p.grant for d in p.grant.add_dirs),

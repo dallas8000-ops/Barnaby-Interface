@@ -126,11 +126,22 @@ class ListDevices(_Cmd):
     type: Literal["list_devices"]
 
 
+class ListTemplates(_Cmd):
+    type: Literal["list_templates"]
+
+
+class RunTemplate(_Cmd):
+    type: Literal["run_template"]
+    template_id: str = Field(min_length=1, max_length=128)
+    context: str | None = Field(default=None, max_length=2_000)  # what to apply it to
+
+
 Command = Annotated[
     Union[
         Auth, PttStart, PttStop, TextSubmit, Cancel, StopSpeaking, Approve, Deny,
         NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
+        ListTemplates, RunTemplate,
     ],
     Field(discriminator="type"),
 ]
@@ -164,12 +175,20 @@ def ev_continuous_mode_changed(active: bool) -> dict[str, Any]:
     return ev("continuous_mode_changed", active=active)
 
 
-def ev_command_chain_start(chain_id: str) -> dict[str, Any]:
-    return ev("command_chain_start", chain_id=chain_id)
+def ev_command_chain_start(chain_id: str, steps: list[str] | None = None,
+                           name: str | None = None) -> dict[str, Any]:
+    return ev("command_chain_start", chain_id=chain_id, steps=list(steps or []), name=name)
 
 
-def ev_command_chain_end(chain_id: str, success: bool) -> dict[str, Any]:
-    return ev("command_chain_end", chain_id=chain_id, success=success)
+def ev_command_chain_step(chain_id: str, index: int, total: int, text: str) -> dict[str, Any]:
+    return ev("command_chain_step", chain_id=chain_id, index=index, total=total, text=text)
+
+
+def ev_command_chain_end(chain_id: str, success: bool, reason: str = "completed",
+                         completed: int = 0, total: int = 0) -> dict[str, Any]:
+    """reason: completed | failed | declined | cancelled | interrupted | limit"""
+    return ev("command_chain_end", chain_id=chain_id, success=success, reason=reason,
+              completed=completed, total=total)
 
 
 # ---------------------------------------------------------------- IDE bridge events

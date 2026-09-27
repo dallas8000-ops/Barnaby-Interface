@@ -21,6 +21,16 @@ export interface EngineInfo {
   reason?: string;
 }
 
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  step_count: number;
+  custom: boolean;
+}
+
+export type ChainEndReason = "completed" | "failed" | "declined" | "cancelled" | "interrupted" | "limit";
+
 export interface Config {
   workspace: string;
   claude_model: string;
@@ -72,6 +82,7 @@ export type EngineEvent =
       state: EngineState;
       config: Config;
       engines?: EngineInfo[];
+      templates?: TemplateSummary[];
       session_id: string | null;
       speaking: boolean;
       sessions: SessionSummary[];
@@ -103,8 +114,10 @@ export type EngineEvent =
   // Voice feature events
   | { type: "wake_word_detected"; timestamp: number }
   | { type: "continuous_mode_changed"; active: boolean }
-  | { type: "command_chain_start"; chain_id: string }
-  | { type: "command_chain_end"; chain_id: string; success: boolean }
+  | { type: "command_chain_start"; chain_id: string; steps: string[]; name: string | null }
+  | { type: "command_chain_step"; chain_id: string; index: number; total: number; text: string }
+  | { type: "command_chain_end"; chain_id: string; success: boolean; reason: ChainEndReason; completed: number; total: number }
+  | { type: "templates"; items: TemplateSummary[] }
   // IDE bridge events
   | { type: "ide_connected"; ide_type: "vscode" | "cursor" | "claude-desktop"; ide_version: string }
   | { type: "ide_context_update"; file_path: string | null; selection: string | null }
@@ -133,4 +146,6 @@ export type Command =
   | { type: "delete_vocab"; term: string }
   | { type: "open_in_editor"; editor: Editor; path: string; line?: number | null }
   | { type: "list_devices" }
+  | { type: "list_templates" }
+  | { type: "run_template"; template_id: string; context?: string | null }
   | { type: "ping" };

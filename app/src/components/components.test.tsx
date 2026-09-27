@@ -1,3 +1,4 @@
+import * as React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,9 @@ vi.mock("../lib/client", () => ({
 import { initialState, useApp, type Approval } from "../store/app";
 import { ApprovalCard } from "./Approvals";
 import { Composer } from "./Composer";
+import { ChainProgress } from "./ChainProgress";
 import { EngineSwitch } from "./EngineSwitch";
+import { TemplatePicker } from "./TemplatePicker";
 import { usePushToTalk } from "./usePushToTalk";
 
 const approval = (over: Partial<Approval> = {}): Approval => ({
@@ -181,5 +184,94 @@ describe("EngineSwitch", () => {
     useApp.setState({ engines: [{ name: "claude", available: true }] });
     const { container } = render(<EngineSwitch />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("ChainProgress", () => {
+  it("shows each step's state and Stop cancels", async () => {
+    useApp.setState({ chain: { id: "c", name: null, steps: ["Run the tests", "Fix anything failing", "Commit"], index: 1 } });
+    render(<ChainProgress />);
+    expect(screen.getByRole("status")).toHaveTextContent("Step 2 of 3 · Your steps");
+    const items = screen.getAllByRole("listitem");
+    expect(items.map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending"]);
+    expect(items[1]).toHaveTextContent("Running: Fix anything failing");
+    await userEvent.click(screen.getByRole("button", { name: /stop steps/i }));
+    expect(sent).toEqual([{ type: "cancel" }]);
+  });
+
+  it("says when it's waiting for approval, and hides with no chain", () => {
+    useApp.setState({ chain: { id: "c", name: "TDD Cycle", steps: ["a", "b"], index: 0 }, engineState: "awaiting_approval" });
+    const { rerender } = render(<ChainProgress />);
+    expect(screen.getByRole("status")).toHaveTextContent("TDD Cycle · waiting for your OK");
+    useApp.setState({ chain: null });
+    rerender(<ChainProgress />);
+    expect(screen.queryByTestId("chain")).toBeNull();
+  });
+});
+
+describe("TemplatePicker", () => {
+  const templates = [
+    { id: "tdd-cycle", name: "TDD Cycle", description: "Test-driven development workflow", step_count: 4, custom: false },
+    { id: "wf1", name: "Release prep", description: "", step_count: 2, custom: true },
+  ];
+
+  it("runs a template with what it should work on", async () => {
+    useApp.setState({ templates });
+    render(<TemplatePicker />);
+    await userEvent.click(screen.getByRole("button", { name: /templates/i }));
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /TDD Cycle/ }));
+    await userEvent.type(screen.getByLabelText(/what should it work on/i), "the cart total{Enter}");
+    expect(sent).toEqual([{ type: "run_template", template_id: "tdd-cycle", context: "the cart total" }]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opened from inside a form, it neither nests nor submits that form", async () => {
+    useApp.setState({ templates });
+    const outerSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+    render(
+      <form onSubmit={outerSubmit} data-testid="outer">
+        <TemplatePicker />
+      </form>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /templates/i }));
+    expect(screen.getByTestId("outer").contains(screen.getByRole("dialog"))).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: /TDD Cycle/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Run TDD Cycle" }));
+    expect(outerSubmit).not.toHaveBeenCalled();
+    expect(sent).toEqual([{ type: "run_template", template_id: "tdd-cycle", context: null }]);
+  });
+
+  it("context is optional; hidden when the engine lists no templates", async () => {
+    useApp.setState({ templates });
+    const { unmount } = render(<TemplatePicker />);
+    await userEvent.click(screen.getByRole("button", { name: /templates/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Release prep/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Run Release prep" }));
+    expect(sent).toEqual([{ type: "run_template", template_id: "wf1", context: null }]);
+    unmount();
+    useApp.setState({ templates: [] });
+    const { container } = render(<TemplatePicker />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("Modal", () => {
+  it("keeps focus in a field across re-renders (onClose changes every render)", async () => {
+    const { Modal } = await import("./Modal");
+    function Harness() {
+      const [v, setV] = React.useState("");
+      return (
+        <Modal title="T" onClose={() => {}}>
+          <button type="button">First</button>
+          <input aria-label="field" value={v} onChange={(e) => setV(e.target.value)} />
+        </Modal>
+      );
+    }
+    render(<Harness />);
+    const field = screen.getByLabelText("field");
+    await userEvent.type(field, "abc");
+    expect(field).toHaveValue("abc");
+    expect(field).toHaveFocus();
   });
 });

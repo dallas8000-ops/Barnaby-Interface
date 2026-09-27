@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { send } from "../lib/client";
 import { useApp } from "../store/app";
 import { EngineSwitch } from "./EngineSwitch";
+import { TemplatePicker } from "./TemplatePicker";
 
 /**
  * Two modes. With a voice draft pending, it's an editable review box: fixing
@@ -105,8 +106,11 @@ export function Composer() {
         className="w-full rounded-lg border border-line bg-panel px-3.5 py-2.5 text-[15px] text-ink placeholder:text-muted focus:border-cyan focus:outline-none disabled:opacity-60"
       />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <EngineSwitch />
-        <p className="hidden text-xs text-muted sm:block">Say “Cursor, …” or “have Claude …” to switch by voice.</p>
+        <div className="flex items-center gap-3">
+          <EngineSwitch />
+          <TemplatePicker />
+        </div>
+        <p className="hidden text-xs text-muted lg:block">Chain steps with “then”. Switch agents with “Cursor, …”.</p>
       </div>
     </form>
   );

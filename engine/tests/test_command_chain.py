@@ -1,5 +1,5 @@
 import unittest
-from barnaby_engine.command_chain import CommandChain
+from barnaby_engine.command_chain import CommandChain, split_chain
 
 class TestCommandChain(unittest.TestCase):
     def test_initialization(self):
@@ -58,3 +58,36 @@ class TestCommandChain(unittest.TestCase):
         chain.start_chain()
         self.assertTrue(chain.is_active)
         chain.end_chain(success=True)
+
+
+class TestSplitChain(unittest.TestCase):
+    def test_splits_on_explicit_sequencing(self):
+        cases = {
+            "run the tests, then fix anything failing": ["Run the tests", "Fix anything failing"],
+            "run the tests and then fix anything failing": ["Run the tests", "Fix anything failing"],
+            "run the tests then fix anything failing": ["Run the tests", "Fix anything failing"],
+            "first add a test, then implement it, and finally run the suite":
+                ["Add a test", "Implement it", "Run the suite"],
+            "Run the tests. Then fix what fails. After that commit the changes.":
+                ["Run the tests", "Fix what fails", "Commit the changes"],
+            "refactor the cart, next, add tests": ["Refactor the cart", "Add tests"],
+            "check the diff; then commit": ["Check the diff", "Commit"],
+            "run the migration then if it fails roll back": ["Run the migration", "If it fails roll back"],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(split_chain(text), expected)
+
+    def test_never_splits_single_instructions(self):
+        for text in ("if the tests fail then revert the change",
+                     "when it builds, then deploy to staging",
+                     "open the next page component",
+                     "go to the next step",
+                     "explain what `a; then b` does",
+                     "then run lint",
+                     "and then?"):
+            with self.subTest(text=text):
+                self.assertEqual(len(split_chain(text)), 1)
+
+    def test_empty(self):
+        self.assertEqual(split_chain("   "), [])

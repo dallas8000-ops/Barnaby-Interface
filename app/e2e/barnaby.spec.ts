@@ -117,3 +117,36 @@ test("engine switch: Cursor runs the turn, gets its own session, and is labelled
   await page.keyboard.press("Enter");
   await expect(page.getByRole("radio", { name: "Claude" })).toHaveAttribute("aria-checked", "true");
 });
+
+test("chained steps pause for each approval and finish in order", async ({ page }) => {
+  await fresh(page);
+  await page.getByLabel("Type an instruction").fill("lint the code, then run the tests");
+  await page.keyboard.press("Enter");
+  const chain = page.getByTestId("chain");
+  await expect(chain).toContainText("Step 1 of 2");
+  await expect(chain.locator("li")).toHaveText([/Lint the code/, /Run the tests/]);
+
+  for (const step of [1, 2]) {
+    await expect(page.getByTestId("approval")).toBeVisible({ timeout: 15_000 });
+    await expect(chain).toContainText(`Step ${step} of 2`);
+    await expect(chain).toContainText("waiting for your OK");
+    await page.getByRole("button", { name: "Approve" }).click();
+  }
+  await expect(chain).toHaveCount(0, { timeout: 15_000 });
+  const convo = page.getByTestId("conversation");
+  await expect(convo).toContainText("Lint the code");
+  await expect(convo).toContainText("Run the tests");
+});
+
+test("template picker runs a template and Stop ends it", async ({ page }) => {
+  await fresh(page);
+  await page.getByRole("button", { name: "Templates" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /Code Review Checklist/ }).click();
+  await page.getByLabel(/what should it work on/i).fill("the auth module");
+  await page.getByRole("button", { name: "Run Code Review Checklist" }).click();
+  const chain = page.getByTestId("chain");
+  await expect(chain).toContainText("Step 1 of 5 · Code Review Checklist");
+  await chain.getByRole("button", { name: /stop steps/i }).click();
+  await expect(chain).toHaveCount(0);
+  await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk");
+});

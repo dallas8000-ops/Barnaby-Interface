@@ -24,7 +24,7 @@ from . import __version__
 from .adaptive import VoiceProfile
 from .agent import AgentError, ClaudeCodeAgent, resolve_claude
 from .cursor_agent import CursorAgent, resolve_cursor
-from .config import Config, data_dir
+from .config import resolve_workflows_dir, Config, data_dir
 from .orchestrator import Orchestrator
 from .server import Bridge, allowed_origins_from_env
 from .store import Store
@@ -80,7 +80,7 @@ async def amain(args: argparse.Namespace) -> None:
     
     ide_bridge = IdeBridge(port=config.ide_bridge_port)
     
-    workflow_engine = WorkflowEngine(workflows_dir=config.workflows_directory)
+    workflow_engine = WorkflowEngine(workflows_dir=str(resolve_workflows_dir(config.workflows_directory)))
     
     macro_recorder = MacroRecorder()
     
@@ -121,6 +121,7 @@ async def amain(args: argparse.Namespace) -> None:
 
     orch = Orchestrator(config=config, store=store, profile=profile, recorder=recorder,
                         transcriber=transcriber, speaker=speaker, agents=agents, engine_available=available,
+                        templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
                         transcriber_factory=tfactory, speaker_factory=sfactory)
     bridge.orchestrator = orch

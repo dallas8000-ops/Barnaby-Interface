@@ -11,6 +11,7 @@ import type {
   Risk,
   SessionSummary,
   StoredTurn,
+  TemplateSummary,
 } from "../lib/protocol";
 
 export interface ToolItem {
@@ -43,6 +44,13 @@ export interface Approval {
   voiceApprovable: boolean;
   grantable: boolean;
   decided: boolean | null;
+}
+
+export interface ChainView {
+  id: string;
+  name: string | null;
+  steps: string[];
+  index: number;
 }
 
 export interface Toast {
@@ -78,8 +86,8 @@ export interface AppState {
   // Voice features
   wakeWordActive: boolean;
   continuousMode: boolean;
-  commandChainActive: boolean;
-  commandChainDepth: number;
+  chain: ChainView | null;
+  templates: TemplateSummary[];
   
   // IDE bridge
   ideConnected: boolean;
@@ -111,8 +119,8 @@ export const initialState: AppState = {
   // Voice features
   wakeWordActive: false,
   continuousMode: false,
-  commandChainActive: false,
-  commandChainDepth: 0,
+  chain: null,
+  templates: [],
   
   // IDE bridge
   ideConnected: false,
@@ -151,6 +159,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         engineState: e.state,
         config: e.config,
         engines: e.engines ?? s.engines,
+        templates: e.templates ?? s.templates,
         sessions: e.sessions,
         speaking: e.speaking,
         components: e.components ?? s.components,
@@ -262,9 +271,20 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
     case "continuous_mode_changed":
       return { ...s, continuousMode: e.active };
     case "command_chain_start":
-      return { ...s, commandChainActive: true, commandChainDepth: 0 };
-    case "command_chain_end":
-      return { ...s, commandChainActive: false, commandChainDepth: 0 };
+      return { ...s, chain: { id: e.chain_id, name: e.name, steps: e.steps, index: 0 } };
+    case "command_chain_step":
+      return s.chain?.id === e.chain_id ? { ...s, chain: { ...s.chain, index: e.index } } : s;
+    case "command_chain_end": {
+      const why =
+        e.reason === "declined" ? "you declined an action" : e.reason === "failed" ? "a step didn't finish" : null;
+      return {
+        ...s,
+        chain: s.chain?.id === e.chain_id ? null : s.chain,
+        toasts: why ? toast(s, "info", `Stopped after step ${e.completed + 1} of ${e.total}: ${why}.`) : s.toasts,
+      };
+    }
+    case "templates":
+      return { ...s, templates: e.items };
     // IDE bridge events
     case "ide_connected":
       return { ...s, ideConnected: true, ideType: e.ide_type };
@@ -287,8 +307,6 @@ interface Actions {
   setConnection: (c: ConnectionStatus) => void;
   dismissToast: (id: number) => void;
   setDraftText: (text: string) => void;
-  toggleWakeWord: () => void;
-  toggleContinuousMode: () => void;
 }
 
 export const useApp = create<AppState & Actions>()((set) => ({
@@ -297,6 +315,4 @@ export const useApp = create<AppState & Actions>()((set) => ({
   setConnection: (connection) => set({ connection }),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setDraftText: (text) => set((s) => (s.draft ? { draft: { ...s.draft, text } } : {})),
-  toggleWakeWord: () => set((s) => ({ wakeWordActive: !s.wakeWordActive })),
-  toggleContinuousMode: () => set((s) => ({ continuousMode: !s.continuousMode })),
 }));
