@@ -38,7 +38,12 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
                        NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk,
                        SetConfig, State, StopSpeaking, TextSubmit, UpdateCorrection,
-                       ev, ev_error, ev_state)
+                       ev, ev_error, ev_state,
+                       ev_wake_word_detected, ev_continuous_mode_changed,
+                       ev_command_chain_start, ev_command_chain_end,
+                       ev_ide_connected, ev_ide_context_update,
+                       ev_workflow_started, ev_workflow_step_complete,
+                       ev_workflow_error, ev_macro_recorded)
 from .cursor_agent import cursor_grantable
 from .safety import Grant, assess, grant_for
 from .speech import SpeechComposer

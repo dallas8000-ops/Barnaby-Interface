@@ -28,6 +28,13 @@ from .config import Config, data_dir
 from .orchestrator import Orchestrator
 from .server import Bridge, allowed_origins_from_env
 from .store import Store
+from .wake_word import WakeWordDetector
+from .continuous import ContinuousMode
+from .command_chain import CommandChain
+from .ide_bridge import IdeBridge
+from .workflows import WorkflowEngine
+from .macro_recorder import MacroRecorder
+from .templates import TemplateManager
 
 
 def _setup_logging() -> None:
@@ -60,6 +67,24 @@ async def amain(args: argparse.Namespace) -> None:
     store = Store(data_dir() / "barnaby.db")
     profile = VoiceProfile(store)
     bridge = Bridge(token, allowed_origins_from_env())
+    
+    # Initialize new subsystems
+    wake_word_detector = WakeWordDetector(
+        keyword=config.wake_word_keyword,
+        sensitivity=config.wake_word_sensitivity,
+    )
+    
+    continuous_mode = ContinuousMode(timeout=config.continuous_mode_timeout)
+    
+    command_chain = CommandChain(max_depth=config.command_chain_max_depth)
+    
+    ide_bridge = IdeBridge(port=config.ide_bridge_port)
+    
+    workflow_engine = WorkflowEngine(workflows_dir=config.workflows_directory)
+    
+    macro_recorder = MacroRecorder()
+    
+    template_manager = TemplateManager()
 
     if args.mock:
         from .mock import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
