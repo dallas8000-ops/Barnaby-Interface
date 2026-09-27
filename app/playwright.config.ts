@@ -1,11 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // E2E runs the real engine process in --mock mode (scripted agent, fake audio)
 // against the production UI build. No mic, no models, no API spend.
 const TOKEN = "e2e-token-0123456789abcdefghijklmnopqrstuv";
 const ENGINE_PORT = 8765;
 const PY = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
-const DATA_DIR = process.env.BARNABY_E2E_DATA ?? "./.e2e-data";
+// A fresh data dir per run: sessions and learned voice corrections persisted in a
+// fixed "./.e2e-data" (which, with cwd ../engine, was engine/.e2e-data) and leaked
+// between runs; e.g. a learned "tests -> specs" rewrote the next run's transcript.
+const DATA_DIR = process.env.BARNABY_E2E_DATA ?? mkdtempSync(join(tmpdir(), "barnaby-e2e-"));
 
 export const ENGINE_QUERY = `?engine=ws://127.0.0.1:${ENGINE_PORT}&token=${TOKEN}`;
 
@@ -28,7 +34,10 @@ export default defineConfig({
       command: `${PY} -m barnaby_engine --mock --port ${ENGINE_PORT}`,
       cwd: "../engine",
       env: { BARNABY_TOKEN: TOKEN, BARNABY_DATA_DIR: DATA_DIR },
-      port: ENGINE_PORT,
+      // HTTP readiness check: the engine answers plain GETs with 200. A bare `port`
+      // probe opens and drops a TCP connection, which websockets logs as a scary
+      // (harmless) "opening handshake failed" traceback on every run.
+      url: `http://127.0.0.1:${ENGINE_PORT}/`,
       reuseExistingServer: false,
       timeout: 20_000,
     },

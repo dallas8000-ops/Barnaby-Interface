@@ -80,7 +80,7 @@ class Config:
     
     # Workflow settings
     workflows_enabled: bool = True
-    workflows_directory: str = "%APPDATA%\\Barnaby\\workflows"
+    workflows_directory: str = ""        # empty = <data dir>/workflows; see resolve_workflows_dir()
     macro_recording_enabled: bool = True
 
     # Keys the UI is allowed to change. safe_bash is deliberately excluded:
@@ -126,6 +126,21 @@ class Config:
         d.pop("claude_bin", None)
         d.pop("cursor_bin", None)
         return d
+
+
+def resolve_workflows_dir(configured: str) -> Path:
+    """Where workflow files live. Empty -> the per-user data dir.
+
+    Earlier builds defaulted to the literal string "%APPDATA%\\Barnaby\\workflows";
+    Path() doesn't expand variables, so that created a folder literally named
+    "%APPDATA%" inside whatever the working directory was (the repo). Expand
+    variables and ~, and never accept a relative or still-unexpanded path.
+    """
+    if configured:
+        expanded = Path(os.path.expanduser(os.path.expandvars(configured)))
+        if expanded.is_absolute() and "%" not in str(expanded) and "$" not in str(expanded):
+            return expanded
+    return data_dir() / "workflows"
 
 
 def validate_config(config: Config) -> list[str]:

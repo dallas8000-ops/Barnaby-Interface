@@ -1,9 +1,14 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /** Accessible modal: focus moves in, Tab is trapped, Esc closes, focus returns. */
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const panel = useRef<HTMLDivElement>(null);
+  // Callers pass a fresh onClose each render. Depending on it re-ran the effect
+  // below on every keystroke, which yanked focus back to the first button.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -15,7 +20,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        closeRef.current();
       } else if (e.key === "Tab") {
         const items = focusables();
         if (!items.length) return;
@@ -35,10 +40,13 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
       document.removeEventListener("keydown", onKey, true);
       previous?.focus?.();
     };
-  }, [onClose]);
+  }, []); // mount/unmount only: focus in, trap, restore focus on close
 
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-[2px]" onMouseDown={onClose}>
+  // Portal to <body>: a dialog opened from inside another component's <form>
+  // (the template picker lives in the composer) must not nest forms. A nested
+  // submit triggered a native GET that reloaded the app without its engine URL.
+  return createPortal(
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-[2px]" onMouseDown={() => closeRef.current()}>
       <div
         ref={panel}
         role="dialog"
@@ -57,6 +65,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         </header>
         <div className="px-5 py-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

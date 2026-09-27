@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -89,10 +90,14 @@ class WorkflowEngine:
             List of workflow objects
         """
         workflows = []
-        for workflow_file in self.workflows_dir.glob("*.json"):
-            with open(workflow_file, "r") as f:
-                data = json.load(f)
+        for workflow_file in sorted(self.workflows_dir.glob("*.json")):
+            try:
+                with open(workflow_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
                 workflows.append(Workflow.from_dict(data))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                # A hand-edited file with a typo must not hide every other workflow.
+                logging.getLogger(__name__).warning("skipping unreadable workflow %s: %s", workflow_file.name, exc)
         return workflows
     
     def execute_workflow(self, workflow: Workflow, agent_callback) -> bool:
