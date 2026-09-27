@@ -40,7 +40,16 @@ from .templates import TemplateManager
 def _setup_logging() -> None:
     handler = RotatingFileHandler(data_dir() / "engine.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler, logging.StreamHandler(sys.stderr)])
+    handlers: list[logging.Handler] = [handler]
+    if sys.stderr is not None:  # None under a GUI parent with no console
+        handlers.append(logging.StreamHandler(sys.stderr))
+    # force=True: basicConfig is otherwise a silent no-op if a library configured the
+    # root logger first. The startup line makes an empty or stale log obvious.
+    # (Diagnosis note: processes started from inside the packaged Claude desktop app
+    # have AppData writes virtualized into its package cache, so they see a *different*
+    # engine.log than the app launched from the Start menu. Not an engine bug.)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+    logging.getLogger(__name__).info("engine %s starting (pid %s, data dir %s)", __version__, os.getpid(), data_dir())
 
 
 def _watch_stdin(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> None:
