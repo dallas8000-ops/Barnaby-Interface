@@ -115,4 +115,15 @@ describe("reduceEvent", () => {
     const done = reduceEvent(s, { type: "command_chain_end", chain_id: "c", success: true, reason: "completed", completed: 2, total: 2 });
     expect(done.toasts).toHaveLength(s.toasts.length);
   });
+
+  it("learns hands-free state from hello and counts draft commands", () => {
+    const s = run([
+      { type: "hello", state: "idle", config: {} as never, session_id: null, speaking: false, sessions: [],
+        components: { stt: { status: "ready" }, tts: { status: "ready" } }, protocol: 1, handsfree: true },
+      { type: "draft_command", action: "send" },
+      { type: "draft_command", action: "send" },
+    ]);
+    expect(s.continuousMode).toBe(true);
+    expect(s.draftCommand).toEqual({ seq: 2, action: "send" });
+  });
 });

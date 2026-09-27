@@ -45,12 +45,13 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        ev_workflow_started, ev_workflow_step_complete,
                        ev_workflow_error, ev_macro_recorded)
 from .command_chain import split_chain
+from .continuous import VoiceSegmenter
 from .cursor_agent import cursor_grantable
 from .safety import Grant, assess, grant_for
 from .speech import SpeechComposer
 from .store import Store
 from .templates import TemplateManager, match_template, template_steps
-from .voice import STT_RATE, Recorder, Speaker, Transcriber, list_input_devices
+from .voice import STT_RATE, Recorder, Speaker, Transcriber, list_input_devices, resample
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +93,25 @@ def route_engine(text: str) -> tuple[str | None, str]:
     if not has_verb and not has_sep and m.group(2).strip():
         return None, text  # "cursor position is wrong" is not an address
     return _ENGINE_WORDS[word], m.group(2).strip()
+
+
+_SEND = frozenset({"send", "send it", "send that", "submit", "submit it", "go", "go ahead", "do it"})
+_DISCARD = frozenset({"scratch that", "discard", "discard it", "discard that", "cancel that", "never mind",
+                      "nevermind", "delete that", "forget it", "forget that"})
+
+
+def classify_draft_command(text: str) -> str | None:
+    """Hands-free control of a pending review draft: "send it" / "scratch that".
+    Only the whole short phrase counts, so "send the report to finance" is an
+    ordinary instruction."""
+    words = re.sub(r"[^a-z' ]+", " ", text.lower()).split()
+    words = [w for w in words if w not in ("please", "ok", "okay", "barnaby", "now", "yes")]
+    phrase = " ".join(words)
+    if phrase in _SEND:
+        return "send"
+    if phrase in _DISCARD:
+        return "discard"
+    return None
 
 
 def classify_spoken_decision(text: str) -> bool | None:
@@ -222,6 +242,11 @@ class Orchestrator:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._recording = False
         self._transcribing = False
+        # Hands-free (continuous dictation): an always-open mic stream cut into utterances.
+        self._hf: VoiceSegmenter | None = None
+        self._hf_rate = STT_RATE
+        self._hf_resume = False          # push-to-talk suspended the stream; restart after
+        self._speech_ended_at = 0.0      # echo guard: don't listen right after Barnaby speaks
         self._cancel_requested = False
         # Last-known component status, replayed in `hello`: load events fire at
         # startup, usually before any UI has connected to receive them.
@@ -234,8 +259,10 @@ class Orchestrator:
         self._speech_task = asyncio.create_task(self._speech_worker())
         self._refresh_project_terms()
         asyncio.create_task(self._preload())
+        await self._apply_handsfree()
 
     async def shutdown(self) -> None:
+        self._stop_handsfree()
         await self._cancel_turn()
         self.speaker.stop()
         if self._speech_task:
@@ -243,7 +270,7 @@ class Orchestrator:
 
     async def hello(self) -> dict[str, Any]:
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
-                  templates=self._template_summaries(),
+                  templates=self._template_summaries(), handsfree=self._hf is not None,
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components)
 
@@ -342,6 +369,10 @@ class Orchestrator:
             await self.emit(ev("notice", message="Still working out your last recording."))
             return
         self._stop_speaking()  # barge-in
+        if self._hf is not None:
+            # Push-to-talk takes over the mic; hands-free resumes after this recording.
+            self._stop_handsfree()
+            self._hf_resume = True
         loop = asyncio.get_running_loop()
 
         def on_level(rms: float) -> None:  # PortAudio thread
@@ -366,11 +397,26 @@ class Orchestrator:
             return
         self._recording = False
         audio = self.recorder.stop()
+        try:
+            await self._process_audio(audio)
+        finally:
+            if self._hf_resume:
+                self._hf_resume = False
+                await self._apply_handsfree(announce=False)
+
+    def _resting_state(self) -> State:
         busy = self._turn_task is not None and not self._turn_task.done()
-        resting = State.THINKING if busy else (State.AWAITING_APPROVAL if self._approvals else State.IDLE)
+        return State.THINKING if busy else (State.AWAITING_APPROVAL if self._approvals else State.IDLE)
+
+    async def _process_audio(self, audio: np.ndarray, *, handsfree: bool = False) -> None:
+        """Shared by push-to-talk and hands-free: transcribe, correct, then approve /
+        draft / submit exactly the same way."""
+        busy = self._turn_task is not None and not self._turn_task.done()
+        resting = self._resting_state()
         rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
         if audio.size < MIN_AUDIO_S * STT_RATE or rms < MIN_RMS:
-            await self.emit(ev("notice", message="I didn't hear anything."))
+            if not handsfree:  # hands-free drops quiet blips silently
+                await self.emit(ev("notice", message="I didn't hear anything."))
             await self._set_state(resting)
             return
 
@@ -396,9 +442,21 @@ class Orchestrator:
             self._transcribing = False
         shown = self.profile.apply(lexicon.normalize(raw))
         if not shown:
-            await self.emit(ev("notice", message="I didn't catch that."))
+            if not handsfree:
+                await self.emit(ev("notice", message="I didn't catch that."))
             await self._set_state(resting)
             return
+
+        # Hands-free: "send it" / "scratch that" act on a pending review draft. The UI
+        # submits it, so edits typed into the draft box are kept.
+        if handsfree and self._drafts and self.config.review_transcripts:
+            action = classify_draft_command(shown)
+            if action:
+                if action == "discard":
+                    self._drafts.clear()
+                await self.emit(ev("draft_command", action=action))
+                await self._set_state(resting)
+                return
 
         # Spoken approval while approvals are pending.
         if self._approvals and not self._approvals.done():
@@ -748,6 +806,68 @@ class Orchestrator:
                          + ". Do not attempt those; briefly say what you'll do instead.")
         await self._start_turn(" ".join(parts), display_text="Approval decision", grant=grant, system_note=True)
 
+    # ------------------------------------------------------------ hands-free
+    async def _apply_handsfree(self, announce: bool = True) -> None:
+        """Start or stop the continuous mic stream to match config (idempotent)."""
+        want = bool(self.config.continuous_mode_enabled) and hasattr(self.recorder, "start_stream") \
+            and not self._recording
+        if want and self._hf is None:
+            loop = asyncio.get_running_loop()
+
+            def on_block(block: np.ndarray) -> None:  # PortAudio thread
+                loop.call_soon_threadsafe(self._feed_handsfree, block)
+
+            try:
+                self._hf_rate = self.recorder.start_stream(on_block)  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                await self.emit(ev_error("mic", f"Hands-free couldn't open the microphone: {exc}"))
+                await self.emit(ev_continuous_mode_changed(False))
+                return
+            self._hf = VoiceSegmenter(rate=self._hf_rate, silence_s=float(self.config.continuous_mode_timeout))
+            if announce:
+                await self.emit(ev_continuous_mode_changed(True))
+        elif not want and self._hf is not None:
+            self._stop_handsfree()
+            if announce:
+                await self.emit(ev_continuous_mode_changed(False))
+        elif self._hf is not None:
+            self._hf.silence_s = float(self.config.continuous_mode_timeout)
+
+    def _stop_handsfree(self) -> None:
+        if self._hf is None:
+            return
+        self._hf = None
+        stop = getattr(self.recorder, "stop_stream", None)
+        if stop:
+            stop()
+
+    def _feed_handsfree(self, block: np.ndarray) -> None:
+        seg = self._hf
+        if seg is None:
+            return
+        # Don't listen while Barnaby talks (it would transcribe itself through the
+        # speakers), just after it stops (room echo), or while busy with a recording.
+        if (self._speaking or self._transcribing or self._recording
+                or time.monotonic() - self._speech_ended_at < 0.5):
+            if not seg.paused:
+                was_capturing = seg.capturing
+                seg.pause()
+                if was_capturing:
+                    asyncio.ensure_future(self._set_state(self._resting_state()))
+            return
+        if seg.paused:
+            seg.resume()
+        was = seg.capturing
+        utterances = seg.feed(block)
+        if seg.capturing:
+            self._on_level(float(np.sqrt(np.mean(block * block))) if block.size else 0.0)
+            if not was:
+                asyncio.ensure_future(self._set_state(State.LISTENING))
+        for audio in utterances:
+            asyncio.ensure_future(self._process_audio(resample(audio, self._hf_rate, STT_RATE), handsfree=True))
+        if was and not seg.capturing and not utterances:
+            asyncio.ensure_future(self._set_state(self._resting_state()))  # it was noise
+
     # ------------------------------------------------------------ speech output
     def _enqueue_speech(self, sentences: list[str], gen: int) -> None:
         if not self.config.tts_enabled:
@@ -776,6 +896,7 @@ class Orchestrator:
                 await self.emit(ev_error("tts", _component_hint("tts", exc)))
             if self._speech_q.empty() and self._speaking:
                 self._speaking = False
+                self._speech_ended_at = time.monotonic()
                 await self.emit(ev("speaking", active=False))
 
     # ------------------------------------------------------------ misc
@@ -809,6 +930,7 @@ class Orchestrator:
         self.config.save()
         after = self.config.public()
         self._apply_models()
+        await self._apply_handsfree()
         if before["engine"] != after["engine"] and before["workspace"] == after["workspace"]:
             # Pending approvals and the running turn belong to the old engine.
             await self._cancel_all()

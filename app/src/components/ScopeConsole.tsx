@@ -21,6 +21,7 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
   const speaking = useApp((s) => s.speaking);
   const connection = useApp((s) => s.connection);
   const stt = useApp((s) => s.components.stt);
+  const handsFree = useApp((s) => s.continuousMode);
   const { press, release } = usePushToTalk();
 
   const busy = engineState === "thinking" || engineState === "transcribing";
@@ -33,7 +34,11 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
         ? "Loading speech model"
         : speaking && engineState === "thinking"
           ? "Working and speaking"
-          : CAPTION[engineState];
+          : handsFree && engineState === "idle"
+            ? "Hands-free: just start talking"
+            : handsFree && engineState === "listening"
+              ? "Listening. Pause to send."
+              : CAPTION[engineState];
 
   return (
     <div className="flex flex-col items-center gap-3">

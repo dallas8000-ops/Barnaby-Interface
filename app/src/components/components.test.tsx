@@ -17,6 +17,9 @@ import { ApprovalCard } from "./Approvals";
 import { Composer } from "./Composer";
 import { ChainProgress } from "./ChainProgress";
 import { EngineSwitch } from "./EngineSwitch";
+import { HandsFreeToggle } from "./HandsFreeToggle";
+import { ScopeConsole } from "./ScopeConsole";
+import { SettingsDialog } from "./SettingsDialog";
 import { TemplatePicker } from "./TemplatePicker";
 import { usePushToTalk } from "./usePushToTalk";
 
@@ -273,5 +276,69 @@ describe("Modal", () => {
     await userEvent.type(field, "abc");
     expect(field).toHaveValue("abc");
     expect(field).toHaveFocus();
+  });
+});
+
+describe("Hands-free", () => {
+  it("toggle sends the setting and reflects it", async () => {
+    useApp.setState({ config: { workspace: "/proj", continuous_mode_enabled: false } as never });
+    render(<HandsFreeToggle />);
+    const sw = screen.getByRole("switch", { name: /hands-free/i });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(sw);
+    expect(sent).toEqual([{ type: "set_config", values: { continuous_mode_enabled: true } }]);
+  });
+
+  it("warns when enabled but the mic couldn't open", () => {
+    useApp.setState({ config: { workspace: "/proj", continuous_mode_enabled: true } as never, continuousMode: false });
+    render(<HandsFreeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("title", expect.stringMatching(/couldn't be opened/));
+  });
+
+  it("caption tells you to just talk, and to pause to send", () => {
+    useApp.setState({ continuousMode: true, engineState: "idle", components: { stt: { status: "ready" }, tts: { status: "ready" } } });
+    const { rerender } = render(<ScopeConsole />);
+    expect(screen.getByTestId("caption")).toHaveTextContent("Hands-free: just start talking");
+    useApp.setState({ engineState: "listening" });
+    rerender(<ScopeConsole />);
+    expect(screen.getByTestId("caption")).toHaveTextContent("Listening. Pause to send.");
+  });
+
+  it("spoken 'send it' submits the draft with typed edits; 'scratch that' discards", async () => {
+    useApp.setState({ draft: { id: "d1", heard: "open doc ops", text: "open DBOps" }, continuousMode: true });
+    render(<Composer />);
+    expect(screen.getByText(/say “send it”/)).toBeInTheDocument();
+    act(() => useApp.getState().apply({ type: "draft_command", action: "send" }));
+    expect(sent).toEqual([{ type: "text_submit", text: "open DBOps", draft_id: "d1" }]);
+    act(() => useApp.getState().apply({ type: "draft_command", action: "discard" }));
+    expect(sent.at(-1)).toEqual({ type: "discard_draft", draft_id: "d1" });
+    expect(useApp.getState().draft).toBeNull();
+  });
+});
+
+describe("SettingsDialog microphone", () => {
+  it("names the mic Automatic really uses and flags speaker loopbacks", () => {
+    useApp.setState({
+      config: {
+        workspace: "/proj", input_device: null, whisper_model: "small.en", continuous_mode_timeout: 1.2,
+        claude_model: "", cursor_model: "", tts_enabled: true, tts_speed: 1.05, tts_voice: "am_michael",
+        max_spoken_chars: 400, review_transcripts: false, save_voice_samples: false,
+      } as never,
+      devices: [
+        { index: 1, name: '"What U Hear" (Sound Blaster)', default: true, auto: false, loopback: true },
+        { index: 2, name: "Microphone (HD Pro Webcam C920)", default: false, auto: true, loopback: false },
+      ],
+    });
+    render(<SettingsDialog onClose={() => {}} />);
+    const mic = screen.getByLabelText("Microphone") as HTMLSelectElement;
+    const labels = Array.from(mic.options).map((o) => o.textContent);
+    expect(labels).toEqual([
+      "Automatic (Microphone (HD Pro Webcam C920))",
+      '"What U Hear" (Sound Blaster) (records speaker output)',
+      "Microphone (HD Pro Webcam C920)",
+    ]);
+    expect(sent).toContainEqual({ type: "list_devices" });
+    fireEvent.change(mic, { target: { value: "2" } });
+    expect(sent).toContainEqual({ type: "set_config", values: { input_device: 2 } });
   });
 });

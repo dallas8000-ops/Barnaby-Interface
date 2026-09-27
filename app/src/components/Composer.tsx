@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { send } from "../lib/client";
 import { useApp } from "../store/app";
 import { EngineSwitch } from "./EngineSwitch";
+import { HandsFreeToggle } from "./HandsFreeToggle";
 import { TemplatePicker } from "./TemplatePicker";
 
 /**
@@ -15,6 +16,8 @@ export function Composer() {
   const connection = useApp((s) => s.connection);
   const hasWorkspace = useApp((s) => Boolean(s.config?.workspace));
   const [typed, setTyped] = useState("");
+  const draftCommand = useApp((s) => s.draftCommand);
+  const handsFreeOn = useApp((s) => s.continuousMode);
   const draftRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -24,6 +27,20 @@ export function Composer() {
       draftRef.current?.setSelectionRange(len, len);
     }
   }, [draft?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Hands-free "send it" / "scratch that": act on the draft as shown, including typed edits.
+  useEffect(() => {
+    const cmd = draftCommand;
+    const current = useApp.getState().draft;
+    if (!cmd || !current) return;
+    if (cmd.action === "send") {
+      const text = current.text.trim();
+      if (text) send({ type: "text_submit", text, draft_id: current.id });
+    } else {
+      send({ type: "discard_draft", draft_id: current.id });
+      useApp.setState({ draft: null });
+    }
+  }, [draftCommand?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!hasWorkspace) return null;
 
@@ -63,7 +80,10 @@ export function Composer() {
           className="w-full resize-none bg-transparent text-[15px] text-ink outline-none"
         />
         <div className="mt-2 flex items-center justify-between gap-3">
-          <p className="text-xs text-muted">{changed ? "Your fixes teach Barnaby how you talk." : "Enter sends. Esc discards."}</p>
+          <p className="text-xs text-muted">
+            {changed ? "Your fixes teach Barnaby how you talk." : "Enter sends. Esc discards."}
+            {handsFreeOn && " Or say “send it” / “scratch that”."}
+          </p>
           <div className="flex gap-2">
             <button
               type="button"
@@ -109,6 +129,7 @@ export function Composer() {
         <div className="flex items-center gap-3">
           <EngineSwitch />
           <TemplatePicker />
+          <HandsFreeToggle />
         </div>
         <p className="hidden text-xs text-muted lg:block">Chain steps with “then”. Switch agents with “Cursor, …”.</p>
       </div>

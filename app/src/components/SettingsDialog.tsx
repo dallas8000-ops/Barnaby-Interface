@@ -72,6 +72,7 @@ const inputCls = "w-full rounded-md border border-line bg-raised px-2.5 py-1.5 t
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const config = useApp((s) => s.config);
   const devices = useApp((s) => s.devices);
+  const autoMic = devices.find((d) => d.auto);
   const [theme, setTheme] = useState<Theme>(readTheme);
 
   useEffect(() => {
@@ -131,10 +132,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             value={config.input_device ?? ""}
             onChange={(e) => set({ input_device: e.target.value === "" ? null : Number(e.target.value) })}
           >
-            <option value="">System default</option>
+            <option value="">{autoMic ? `Automatic (${autoMic.name})` : "System default"}</option>
             {devices.map((d) => (
               <option key={d.index} value={d.index}>
-                {d.name}
+                {d.loopback ? `${d.name} (records speaker output)` : d.name}
               </option>
             ))}
           </select>
@@ -147,6 +148,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
+        </Field>
+        <Field label="Hands-free pause" htmlFor="hf-pause" hint="In hands-free mode, how long a pause ends your turn. Raise it if you get cut off mid-thought.">
+          <div className="flex items-center gap-3">
+            <input
+              id="hf-pause"
+              type="range"
+              min={0.6}
+              max={3}
+              step={0.1}
+              defaultValue={config.continuous_mode_timeout}
+              onPointerUp={(e) => set({ continuous_mode_timeout: Number((e.target as HTMLInputElement).value) })}
+              onKeyUp={(e) => set({ continuous_mode_timeout: Number((e.target as HTMLInputElement).value) })}
+              className="flex-1 accent-[var(--c-cyan)]"
+            />
+            <span className="w-12 text-right text-sm tabular-nums text-muted">{config.continuous_mode_timeout.toFixed(1)} s</span>
+          </div>
         </Field>
         <Field label="Review before sending" hint="Shows what I heard so you can fix words first. Fixes train your voice profile.">
           <Toggle id="review" label="Review before sending" checked={config.review_transcripts} onChange={(v) => set({ review_transcripts: v })} />

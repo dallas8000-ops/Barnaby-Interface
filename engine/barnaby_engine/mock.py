@@ -38,6 +38,16 @@ class FakeRecorder:
         self.aborted = True
         self.started = False
 
+    # hands-free: tests push blocks through ``stream_cb``; E2E only toggles it
+    stream_cb = None
+
+    def start_stream(self, on_block: Callable[[np.ndarray], None]) -> int:
+        self.stream_cb = on_block
+        return 16_000
+
+    def stop_stream(self) -> None:
+        self.stream_cb = None
+
 
 class FakeTranscriber:
     def __init__(self, texts: list[str] | None = None) -> None:

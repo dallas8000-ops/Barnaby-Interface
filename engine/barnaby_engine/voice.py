@@ -52,6 +52,47 @@ def resample(audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
     return np.interp(x_new, x_old, audio).astype(np.float32)
 
 
+# Capture endpoints that record what the speakers play, not a microphone. Sound
+# cards (Creative "What U Hear", Realtek "Stereo Mix") often register one as the
+# Windows default recording device. Listening to it hears silence, or worse, in
+# hands-free mode it hears Barnaby's own voice and whatever else is playing.
+_LOOPBACK_MARKERS = ("what u hear", "what you hear", "stereo mix", "wave out mix", "loopback")
+# Aliases that forward to whatever the Windows default is, so they are the loopback too.
+_DEFAULT_ALIASES = ("sound mapper", "primary sound capture")
+
+
+def is_loopback(name: str) -> bool:
+    lowered = name.lower()
+    return any(m in lowered for m in _LOOPBACK_MARKERS)
+
+
+def pick_input_device(devices: list[dict], default_index: int | None) -> int | None:
+    """The input to use when the user hasn't chosen one: the system default, unless
+    that's a speaker loopback. Then use the first real input on the same audio API
+    (preferring names that say "mic"). ``None`` means let PortAudio decide."""
+    def is_input(i: int) -> bool:
+        return 0 <= i < len(devices) and devices[i].get("max_input_channels", 0) > 0
+
+    if default_index is None or not is_input(default_index):
+        return None
+    if not is_loopback(str(devices[default_index].get("name", ""))):
+        return default_index
+    api = devices[default_index].get("hostapi")
+    def usable(i: int) -> bool:
+        name = str(devices[i].get("name", "")).lower()
+        return is_input(i) and devices[i].get("hostapi") == api and not is_loopback(name) \
+            and not any(a in name for a in _DEFAULT_ALIASES)
+
+    real = [i for i in range(len(devices)) if usable(i)]
+    mics = [i for i in real if "mic" in str(devices[i].get("name", "")).lower()]
+    return (mics or real or [default_index])[0]
+
+
+def _default_input_index(sd) -> int | None:  # noqa: ANN001
+    idx = sd.default.device[0]
+    return idx if isinstance(idx, int) and idx >= 0 else None
+
+
 class MicRecorder:
     """Push-to-talk capture. Tries 16 kHz natively, else device rate + resample
     (WASAPI shared mode rejects non-native rates)."""
@@ -62,10 +103,38 @@ class MicRecorder:
         self._stream = None
         self._rate = STT_RATE
         self._lock = threading.Lock()
+        self._hf_stream = None  # hands-free continuous stream (separate from push-to-talk)
+        self._loopback_warned = False
 
-    def start(self, on_level: Callable[[float], None]) -> None:
+    def _open(self, callback: Callable[..., None]) -> tuple[object, int]:
+        """Open an input stream: 16 kHz natively if the device allows, else its own rate
+        (WASAPI shared mode rejects non-native rates). Returns (stream, rate)."""
         import sounddevice as sd  # lazy
 
+        device = self.device
+        if device is None:
+            default = _default_input_index(sd)
+            device = pick_input_device(list(sd.query_devices()), default)
+            if device != default and not self._loopback_warned:
+                self._loopback_warned = True
+                log.warning("System default input %r records speaker output; using %r instead",
+                            sd.query_devices(default)["name"], sd.query_devices(device)["name"])
+        last: Exception | None = None
+        for rate in (STT_RATE, None):
+            try:
+                if rate is None:
+                    info = sd.query_devices(device, "input")
+                    rate = int(info["default_samplerate"])
+                stream = sd.InputStream(samplerate=rate, channels=1, dtype="float32",
+                                        device=device, blocksize=int(rate * 0.03),
+                                        callback=callback)
+                stream.start()
+                return stream, rate
+            except Exception as exc:  # noqa: BLE001 - PortAudio raises bare errors
+                last = exc
+        raise RuntimeError(f"Microphone unavailable: {last}")
+
+    def start(self, on_level: Callable[[float], None]) -> None:
         self.abort()
         self._chunks = []
         max_frames = MAX_RECORD_S * 48_000
@@ -79,20 +148,27 @@ class MicRecorder:
                     self._chunks.append(mono)
             on_level(float(np.sqrt(np.mean(mono * mono))) if mono.size else 0.0)
 
-        for rate in (STT_RATE, None):
-            try:
-                if rate is None:
-                    info = sd.query_devices(self.device, "input")
-                    rate = int(info["default_samplerate"])
-                stream = sd.InputStream(samplerate=rate, channels=1, dtype="float32",
-                                        device=self.device, blocksize=int(rate * 0.03),
-                                        callback=callback)
-                stream.start()
-                self._stream, self._rate = stream, rate
-                return
-            except Exception as exc:  # noqa: BLE001 - PortAudio raises bare errors
-                last = exc
-        raise RuntimeError(f"Microphone unavailable: {last}")
+        self._stream, self._rate = self._open(callback)
+
+    # ---- hands-free: an always-open stream delivering 30 ms blocks
+    def start_stream(self, on_block: Callable[[np.ndarray], None]) -> int:
+        """Open a continuous stream; ``on_block`` gets mono float32 blocks on the
+        PortAudio thread. Returns the stream's sample rate."""
+        self.stop_stream()
+
+        def callback(indata, frames, _time, status):  # PortAudio thread
+            if status:
+                log.debug("input status: %s", status)
+            on_block(indata[:, 0].copy())
+
+        self._hf_stream, rate = self._open(callback)
+        return rate
+
+    def stop_stream(self) -> None:
+        stream, self._hf_stream = self._hf_stream, None
+        if stream is not None:
+            stream.stop()
+            stream.close()
 
     def stop(self) -> np.ndarray:
         stream, self._stream = self._stream, None
@@ -263,10 +339,13 @@ class KokoroSpeaker:
 def list_input_devices() -> list[dict[str, object]]:
     try:
         import sounddevice as sd
-        default_in = sd.default.device[0]
+        devices = list(sd.query_devices())
+        default_in = _default_input_index(sd)
+        auto = pick_input_device(devices, default_in)
         return [
-            {"index": i, "name": d["name"], "default": i == default_in}
-            for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0
+            {"index": i, "name": d["name"], "default": i == default_in,
+             "auto": i == auto, "loopback": is_loopback(d["name"])}
+            for i, d in enumerate(devices) if d["max_input_channels"] > 0
         ]
     except Exception:  # noqa: BLE001
         return []

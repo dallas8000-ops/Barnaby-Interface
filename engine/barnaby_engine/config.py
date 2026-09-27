@@ -68,7 +68,7 @@ class Config:
     
     # Continuous mode settings
     continuous_mode_enabled: bool = False
-    continuous_mode_timeout: float = 2.0  # seconds of silence
+    continuous_mode_timeout: float = 1.2  # seconds of silence that end a hands-free utterance
     
     # Command chaining settings
     command_chain_enabled: bool = True
@@ -87,7 +87,7 @@ class Config:
     # widening the auto-approve list must be a conscious edit of config.json,
     # not something a compromised renderer can flip over the socket.
     UI_MUTABLE = frozenset({
-        "workspace", "claude_model", "engine", "cursor_model", "whisper_model", "whisper_device", "input_device",
+        "workspace", "claude_model", "engine", "cursor_model", "continuous_mode_enabled", "continuous_mode_timeout", "whisper_model", "whisper_device", "input_device",
         "tts_enabled", "tts_voice", "tts_speed", "max_spoken_chars",
         "review_transcripts", "save_voice_samples",
     })
@@ -118,7 +118,7 @@ class Config:
             if key not in self.UI_MUTABLE or validator is None or not validator(value):
                 rejected.append(key)
                 continue
-            setattr(self, key, float(value) if key == "tts_speed" else value)
+            setattr(self, key, float(value) if key in ("tts_speed", "continuous_mode_timeout") else value)
         return rejected
 
     def public(self) -> dict[str, Any]:
@@ -174,6 +174,8 @@ _VALIDATORS: dict[str, Any] = {
     "workspace": lambda v: isinstance(v, str) and (v == "" or Path(v).is_dir()),
     "claude_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._[]" for c in v),
     "engine": lambda v: v in {"claude", "cursor"},
+    "continuous_mode_enabled": lambda v: isinstance(v, bool),
+    "continuous_mode_timeout": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.6 <= v <= 5.0,
     "cursor_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._" for c in v),
     "whisper_model": lambda v: v in {"tiny.en", "base.en", "small.en", "medium.en", "large-v3", "distil-large-v3"},
     "whisper_device": lambda v: v in {"auto", "cpu", "cuda"},

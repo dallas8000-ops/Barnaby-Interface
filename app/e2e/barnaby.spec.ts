@@ -150,3 +150,15 @@ test("template picker runs a template and Stop ends it", async ({ page }) => {
   await expect(chain).toHaveCount(0);
   await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk");
 });
+
+test("hands-free toggles on and off through the engine", async ({ page }) => {
+  await fresh(page);
+  const toggle = page.getByRole("switch", { name: /hands-free/i });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("caption")).toHaveText("Hands-free: just start talking");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk");
+});

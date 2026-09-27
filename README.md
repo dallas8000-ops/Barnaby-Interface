@@ -47,6 +47,7 @@ On first launch, pick your project folder. The speech models (about 250 MB) down
 | Stop a running task | **Stop**, or just give a new instruction; it cancels and resumes the same Claude session with your new words |
 | Fix a misheard word | Edit the review box, then **Enter**. **Esc** discards |
 | Approve an action | **Approve**, or say "yes" / "no". Critical actions need a 1.2-second press-and-hold and can't be voice-approved |
+| Talk hands-free | Turn on **Hands-free** under the instruction box. Just talk; a pause sends it |
 | Chain steps | Say them in order: "run the tests, **then** fix anything failing" |
 | Run a template | "Run the TDD template for the cart total", or the **Templates** button |
 | Open a touched file | **Open in VS Code** / **Open in Cursor** on any file strip |
@@ -69,6 +70,16 @@ agent login
 - **File edits are not restricted by Cursor.** In headless mode, Cursor ignored both `Write()` scopes and explicit `deny` rules, and its `--sandbox` option isn't available on Windows. Barnaby's guard watches every Cursor tool call as it starts, and stops the turn immediately if Cursor reads or edits a file outside the project, or runs a command that goes beyond your rules.
 - **The trade-off.** Because the guard reacts to Cursor's own "tool started" event, it can't promise the first out-of-project write never lands: it stops Cursor at that point, not before. Claude Code, by contrast, refuses such an edit before it happens. For work that touches files outside the project folder, use Claude.
 - **Cost.** Cursor bills against your Cursor plan and reports no per-turn cost, so Cursor turns show none.
+
+## Hands-free mode
+
+Turn on **Hands-free** (next to the agent switch) and the microphone stays open. You just talk, and a pause ends your turn. The default pause is 1.2 seconds; change it in **Settings → Hands-free pause** if you get cut off mid-thought.
+
+- **Barnaby doesn't hear itself.** Listening pauses while Barnaby speaks, plus half a second afterwards, so it never transcribes its own voice through your speakers.
+- **Background noise is filtered.** An adaptive noise floor ignores steady noise. A fan or AC switching on is learned as background rather than transcribed, and coughs and clicks are too short to count. It checks for the energy dips between syllables that speech has and steady noise doesn't.
+- **Voice control of drafts.** With *Review before sending* on, each thing you say becomes a draft. Say **"send it"** to send it, including anything you typed into it, or **"scratch that"** to discard it. Only those short phrases count, so "send the report to finance" is an ordinary instruction. For fully hands-free use, turn review off.
+- **Push-to-talk still works.** Holding Space takes over the mic for that recording, and hands-free resumes afterwards.
+- **It listens to a microphone, not your speakers.** Some sound cards make a speaker-loopback input ("What U Hear", "Stereo Mix") the Windows default recording device. With the microphone left on *Automatic*, Barnaby skips those and uses the first real mic on the same audio system. Settings shows which one it picked and labels loopback inputs. Picking a device yourself always wins.
 
 ## Chained steps and templates
 
@@ -118,9 +129,9 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 189 tests
-cd app;    npm run typecheck; npm test                                   # 35 tests
-cd app;    npx playwright test     # 7 E2E flows against the real engine in --mock mode
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 219 tests
+cd app;    npm run typecheck; npm test                                   # 41 tests
+.\scripts\e2e.ps1                     # 8 E2E flows against the real engine in --mock mode
 ```
 
 The engine suite drives the real subprocess path with a fake `claude` executable. It checks that the prompt arrives on stdin and not in argv, that the settings file is scoped and deleted, that tree-kill works on cancel, that 200 KB stream lines are handled, and that a missing result surfaces stderr. The stream parser is pinned to a fixture captured from real `claude -p --output-format stream-json` output. CI runs all of it on Windows and Ubuntu (`.github/workflows/ci.yml`).
@@ -139,9 +150,8 @@ With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `s
 
 **Written for Windows, first exercised on your machine:** `taskkill /T` tree-kill, `CREATE_NO_WINDOW`, WASAPI sample-rate fallback, `.cmd` launcher handling, and live Whisper/Kokoro inference.
 
-**Planned, not built yet** (see `docs/superpowers/specs/2025-09-27-barnaby-premier-tier-design.md`). The engine has placeholder modules for these (`wake_word.py`, `continuous.py`, `macro_recorder.py`), but none of them is connected to the microphone or the UI. Their toggles are hidden until they work.
+**Planned, not built yet** (see `docs/superpowers/specs/2025-09-27-barnaby-premier-tier-design.md`). The engine has placeholder modules for the first two (`wake_word.py`, `macro_recorder.py`), but neither is connected to the microphone or the UI. Their toggles are hidden until they work.
 - Wake word ("Barnaby" to start listening): needs a real on-device model such as openWakeWord.
-- Continuous dictation (no key to hold, silence ends your turn): the silence timer exists, but isn't wired to the mic.
 - Macro recording and replay.
 - IDE extensions for VS Code, Cursor and Claude Desktop: the engine side, the secured bridge, is ready. The extensions themselves aren't written.
 

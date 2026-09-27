@@ -81,13 +81,15 @@ export interface AppState {
   approvals: Approval[];
   toasts: Toast[];
   voiceProfile: VoiceProfileView | null;
-  devices: { index: number; name: string; default: boolean }[];
+  devices: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[];
   
   // Voice features
   wakeWordActive: boolean;
   continuousMode: boolean;
   chain: ChainView | null;
   templates: TemplateSummary[];
+  /** Spoken "send it" / "scratch that" for the review draft; seq makes repeats distinct. */
+  draftCommand: { seq: number; action: "send" | "discard" } | null;
   
   // IDE bridge
   ideConnected: boolean;
@@ -121,6 +123,7 @@ export const initialState: AppState = {
   continuousMode: false,
   chain: null,
   templates: [],
+  draftCommand: null,
   
   // IDE bridge
   ideConnected: false,
@@ -160,6 +163,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         config: e.config,
         engines: e.engines ?? s.engines,
         templates: e.templates ?? s.templates,
+        continuousMode: e.handsfree ?? s.continuousMode,
         sessions: e.sessions,
         speaking: e.speaking,
         components: e.components ?? s.components,
@@ -270,6 +274,8 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, wakeWordActive: true };
     case "continuous_mode_changed":
       return { ...s, continuousMode: e.active };
+    case "draft_command":
+      return { ...s, draftCommand: { seq: (s.draftCommand?.seq ?? 0) + 1, action: e.action } };
     case "command_chain_start":
       return { ...s, chain: { id: e.chain_id, name: e.name, steps: e.steps, index: 0 } };
     case "command_chain_step":

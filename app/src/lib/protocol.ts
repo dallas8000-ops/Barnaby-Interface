@@ -36,6 +36,8 @@ export interface Config {
   claude_model: string;
   engine: AgentEngine;
   cursor_model: string;
+  continuous_mode_enabled: boolean;
+  continuous_mode_timeout: number;
   whisper_model: string;
   whisper_device: "auto" | "cpu" | "cuda";
   input_device: number | null;
@@ -83,6 +85,7 @@ export type EngineEvent =
       config: Config;
       engines?: EngineInfo[];
       templates?: TemplateSummary[];
+      handsfree?: boolean;
       session_id: string | null;
       speaking: boolean;
       sessions: SessionSummary[];
@@ -107,13 +110,14 @@ export type EngineEvent =
   | { type: "config"; config: Config; rejected?: string[] }
   | { type: "voice_profile"; corrections: Correction[]; vocabulary: string[]; project_terms: string[]; samples: number }
   | { type: "learned"; heard: string; meant: string }
-  | { type: "devices"; items: { index: number; name: string; default: boolean }[] }
+  | { type: "devices"; items: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[] }
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; t: number }
   // Voice feature events
   | { type: "wake_word_detected"; timestamp: number }
   | { type: "continuous_mode_changed"; active: boolean }
+  | { type: "draft_command"; action: "send" | "discard" }
   | { type: "command_chain_start"; chain_id: string; steps: string[]; name: string | null }
   | { type: "command_chain_step"; chain_id: string; index: number; total: number; text: string }
   | { type: "command_chain_end"; chain_id: string; success: boolean; reason: ChainEndReason; completed: number; total: number }
