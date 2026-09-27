@@ -226,6 +226,20 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, toasts: toast(s, "error", e.message) };
     case "pong":
       return s;
+    // Voice feature events (no-op for now, will be implemented in later tasks)
+    case "wake_word_detected":
+    case "continuous_mode_changed":
+    case "command_chain_start":
+    case "command_chain_end":
+    // IDE bridge events (no-op for now, will be implemented in later tasks)
+    case "ide_connected":
+    case "ide_context_update":
+    // Workflow events (no-op for now, will be implemented in later tasks)
+    case "workflow_started":
+    case "workflow_step_complete":
+    case "workflow_error":
+    case "macro_recorded":
+      return s;
   }
 }
 

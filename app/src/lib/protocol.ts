@@ -99,7 +99,20 @@ export type EngineEvent =
   | { type: "devices"; items: { index: number; name: string; default: boolean }[] }
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
-  | { type: "pong"; t: number };
+  | { type: "pong"; t: number }
+  // Voice feature events
+  | { type: "wake_word_detected"; timestamp: number }
+  | { type: "continuous_mode_changed"; active: boolean }
+  | { type: "command_chain_start"; chain_id: string }
+  | { type: "command_chain_end"; chain_id: string; success: boolean }
+  // IDE bridge events
+  | { type: "ide_connected"; ide_type: "vscode" | "cursor" | "claude-desktop"; ide_version: string }
+  | { type: "ide_context_update"; file_path: string | null; selection: string | null }
+  // Workflow events
+  | { type: "workflow_started"; workflow_id: string; workflow_name: string }
+  | { type: "workflow_step_complete"; workflow_id: string; step_number: number; success: boolean }
+  | { type: "workflow_error"; workflow_id: string; error_message: string }
+  | { type: "macro_recorded"; macro_id: string; macro_name: string; step_count: number };
 
 export type Command =
   | { type: "auth"; token: string }

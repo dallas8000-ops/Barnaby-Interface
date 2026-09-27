@@ -153,3 +153,46 @@ def ev_state(state: State, detail: str | None = None) -> dict[str, Any]:
 
 def ev_error(code: str, message: str) -> dict[str, Any]:
     return ev("error", code=code, message=message)
+
+
+# ---------------------------------------------------------------- voice feature events
+def ev_wake_word_detected(timestamp: float) -> dict[str, Any]:
+    return ev("wake_word_detected", timestamp=timestamp)
+
+
+def ev_continuous_mode_changed(active: bool) -> dict[str, Any]:
+    return ev("continuous_mode_changed", active=active)
+
+
+def ev_command_chain_start(chain_id: str) -> dict[str, Any]:
+    return ev("command_chain_start", chain_id=chain_id)
+
+
+def ev_command_chain_end(chain_id: str, success: bool) -> dict[str, Any]:
+    return ev("command_chain_end", chain_id=chain_id, success=success)
+
+
+# ---------------------------------------------------------------- IDE bridge events
+def ev_ide_connected(ide_type: str, ide_version: str) -> dict[str, Any]:
+    return ev("ide_connected", ide_type=ide_type, ide_version=ide_version)
+
+
+def ev_ide_context_update(file_path: str | None, selection: str | None) -> dict[str, Any]:
+    return ev("ide_context_update", file_path=file_path, selection=selection)
+
+
+# ---------------------------------------------------------------- workflow events
+def ev_workflow_started(workflow_id: str, workflow_name: str) -> dict[str, Any]:
+    return ev("workflow_started", workflow_id=workflow_id, workflow_name=workflow_name)
+
+
+def ev_workflow_step_complete(workflow_id: str, step_number: int, success: bool) -> dict[str, Any]:
+    return ev("workflow_step_complete", workflow_id=workflow_id, step_number=step_number, success=success)
+
+
+def ev_workflow_error(workflow_id: str, error_message: str) -> dict[str, Any]:
+    return ev("workflow_error", workflow_id=workflow_id, error_message=error_message)
+
+
+def ev_macro_recorded(macro_id: str, macro_name: str, step_count: int) -> dict[str, Any]:
+    return ev("macro_recorded", macro_id=macro_id, macro_name=macro_name, step_count=step_count)
