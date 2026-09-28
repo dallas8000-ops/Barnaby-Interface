@@ -4,6 +4,7 @@ import { forgetDevice } from "../lib/remote";
 import { SPEECH_KEY } from "../lib/tabletSpeech";
 import { useApp } from "../store/app";
 import { Modal } from "./Modal";
+import { StyleField } from "./SettingsDialog";
 
 /**
  * Settings on a paired tablet: only what a tablet may change (the engine enforces
@@ -62,6 +63,9 @@ export function RemoteSettings({ onClose }: { onClose: () => void }) {
             }}
           />
         </label>
+        <div className="py-1">
+          <StyleField />
+        </div>
         <div className={row}>
           <span className="text-sm text-muted">
             Project folder, microphone, API keys and tablet access can only be changed on the PC.

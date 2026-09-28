@@ -85,7 +85,7 @@ export function ActivityPanel() {
   const shown = scope === "latest" ? withTools.slice(-1) : withTools;
 
   return (
-    <aside className="flex h-full flex-col gap-3 border-l border-line bg-bg p-3" aria-label="Activity">
+    <aside className="app-activity flex h-full flex-col gap-3 border-l border-line bg-bg p-3" aria-label="Activity">
       <Approvals />
       <div className="flex items-center justify-between">
         <h2 className="font-strip text-base font-semibold">Activity</h2>

@@ -31,9 +31,9 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
   const inWorkspace = sessions.filter((s) => !workspace || s.workspace === workspace);
 
   return (
-    <nav className="flex h-full flex-col border-r border-line bg-bg" aria-label="Sessions">
+    <nav className="app-sidebar flex h-full flex-col border-r border-line bg-bg" aria-label="Sessions">
       <div className="px-4 pt-4 pb-3">
-        <p className="font-strip text-[22px] font-semibold leading-none tracking-tight">Barnaby</p>
+        <p className="brand font-strip text-[22px] font-semibold leading-none tracking-tight">Barnaby</p>
         {remote ? (
           // A tablet can't change the project folder (the engine refuses it too).
           <p className="mt-3 flex items-center gap-2 px-0.5 text-sm text-muted" title={workspace}>

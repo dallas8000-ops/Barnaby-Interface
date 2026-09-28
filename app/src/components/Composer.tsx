@@ -123,7 +123,7 @@ export function Composer() {
         disabled={connection !== "open"}
         placeholder="Or type an instruction and press Enter"
         autoComplete="off"
-        className="w-full rounded-lg border border-line bg-panel px-3.5 py-2.5 text-[15px] text-ink placeholder:text-muted focus:border-cyan focus:outline-none disabled:opacity-60"
+        className="composer-input w-full rounded-lg border border-line bg-panel px-3.5 py-2.5 text-[15px] text-ink placeholder:text-muted focus:border-cyan focus:outline-none disabled:opacity-60"
       />
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">

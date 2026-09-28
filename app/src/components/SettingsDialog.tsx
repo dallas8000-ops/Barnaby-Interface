@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { send } from "../lib/client";
 import { pickFolder } from "../lib/platform";
 import type { Config } from "../lib/protocol";
+import { SKINS, applySkin, readSkin, saveSkin, type Skin } from "../lib/skin";
 import { useApp } from "../store/app";
 import { DevinKeyField } from "./DevinKeyField";
 import { RemoteSettings } from "./RemoteSettings";
@@ -75,6 +76,31 @@ const inputCls = "w-full rounded-md border border-line bg-raised px-2.5 py-1.5 t
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const role = useApp((s) => s.role);
   return role === "remote" ? <RemoteSettings onClose={onClose} /> : <DesktopSettings onClose={onClose} />;
+}
+
+/** Visual style: palette plus layout touches (skins.css). Saved on this device only. */
+export function StyleField() {
+  const [skin, setSkin] = useState<Skin>(readSkin);
+  return (
+    <Field label="Style" htmlFor="skin" hint="Saved on this device, so the PC and a tablet can differ.">
+      <select
+        id="skin"
+        className={inputCls}
+        value={skin}
+        onChange={(e) => {
+          const s = e.target.value as Skin;
+          setSkin(s);
+          saveSkin(s);
+        }}
+      >
+        {SKINS.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
 }
 
 function DesktopSettings({ onClose }: { onClose: () => void }) {
@@ -251,6 +277,7 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
             <option value="light">Day</option>
           </select>
         </Field>
+        <StyleField />
       </section>
 
       <section className="mt-3 border-t border-line pt-3">
@@ -265,4 +292,5 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
 
 export function initTheme() {
   applyTheme(readTheme());
+  applySkin(readSkin());
 }

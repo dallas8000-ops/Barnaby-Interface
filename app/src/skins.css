@@ -1,0 +1,186 @@
+/*
+ * Visual styles ("skins"), chosen in Settings → Appearance → Style.
+ * <html data-skin="…">: classic (the original quiet look, follows the Theme
+ * setting), tower, aurora, sunrise. Each skin is a full palette plus shared
+ * layout touches: glass panels, chat bubbles, a glowing scope, a pill input.
+ * Unlayered on purpose, so it wins over Tailwind's layered utilities.
+ */
+
+/* ---------------------------------------------------------------- palettes */
+html:root[data-skin="tower"] {
+  /* Control tower at night: deep navy, radar cyan, beacon amber. */
+  --c-bg: #060b17;
+  --c-panel: #0e1a31;
+  --c-raised: #15264a;
+  --c-line: #1f3a63;
+  --c-ink: #eaf4ff;
+  --c-muted: #8ea6c9;
+  --c-amber: #ffb44a;
+  --c-cyan: #2ee6f5;
+  --c-red: #ff5d73;
+  --c-green: #3ddc97;
+  --c-scope: #04101e;
+  --skin-accent-2: #3fa9ff;
+  --skin-on-accent: #031018;
+  --skin-glass: rgba(14, 26, 49, 0.62);
+  --skin-backdrop:
+    radial-gradient(1100px 620px at 8% -12%, rgba(46, 230, 245, 0.17), transparent 62%),
+    radial-gradient(900px 640px at 112% 108%, rgba(124, 92, 255, 0.22), transparent 60%),
+    linear-gradient(180deg, #060b17 0%, #081226 100%);
+  color-scheme: dark;
+}
+
+html:root[data-skin="aurora"] {
+  /* Northern lights: violet night, electric purple and pink. */
+  --c-bg: #0d0716;
+  --c-panel: #170d29;
+  --c-raised: #231440;
+  --c-line: #33204f;
+  --c-ink: #f6efff;
+  --c-muted: #a794c7;
+  --c-amber: #ffc15e;
+  --c-cyan: #c77dff;
+  --c-red: #ff6b81;
+  --c-green: #5ef2b0;
+  --c-scope: #0a0512;
+  --skin-accent-2: #ff6ec7;
+  --skin-on-accent: #16081f;
+  --skin-glass: rgba(23, 13, 41, 0.6);
+  --skin-backdrop:
+    radial-gradient(1000px 560px at 0% 0%, rgba(199, 125, 255, 0.22), transparent 60%),
+    radial-gradient(900px 600px at 100% 100%, rgba(255, 110, 199, 0.2), transparent 60%),
+    radial-gradient(700px 420px at 60% 30%, rgba(94, 242, 176, 0.07), transparent 70%),
+    #0d0716;
+  color-scheme: dark;
+}
+
+html:root[data-skin="sunrise"] {
+  /* Bright and warm: sunrise peach, bold indigo, coral. */
+  --c-bg: #fff6ee;
+  --c-panel: #ffffff;
+  --c-raised: #fff0e4;
+  --c-line: #efd8c6;
+  --c-ink: #221a38;
+  --c-muted: #6e6386;
+  --c-amber: #e07400;
+  --c-cyan: #5b4dff;
+  --c-red: #e5484d;
+  --c-green: #0e9f64;
+  --c-scope: #f4efff;
+  --skin-accent-2: #7c3aed;
+  --skin-on-accent: #ffffff;
+  --skin-glass: rgba(255, 255, 255, 0.74);
+  --skin-backdrop:
+    radial-gradient(1000px 600px at 0% 0%, rgba(255, 170, 120, 0.35), transparent 60%),
+    radial-gradient(900px 620px at 100% 100%, rgba(151, 125, 255, 0.28), transparent 60%),
+    #fff6ee;
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------- shared layout */
+html[data-skin="tower"] body,
+html[data-skin="aurora"] body,
+html[data-skin="sunrise"] body {
+  background: var(--skin-backdrop);
+  background-attachment: fixed;
+}
+
+html[data-skin]:not([data-skin="classic"]) .app-shell,
+html[data-skin]:not([data-skin="classic"]) .app-main {
+  background: transparent;
+}
+
+html[data-skin]:not([data-skin="classic"]) .app-sidebar,
+html[data-skin]:not([data-skin="classic"]) .app-activity {
+  background: var(--skin-glass);
+  backdrop-filter: blur(16px);
+  border-color: color-mix(in srgb, var(--c-line) 75%, transparent);
+}
+
+html[data-skin]:not([data-skin="classic"]) .app-console {
+  background: linear-gradient(180deg, transparent, var(--skin-glass) 40%);
+  border-top-color: transparent;
+}
+
+html[data-skin]:not([data-skin="classic"]) .brand {
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  background: linear-gradient(90deg, var(--c-cyan), var(--skin-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+html[data-skin]:not([data-skin="classic"]) .app-sidebar [aria-current="true"] {
+  background: color-mix(in srgb, var(--c-cyan) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--c-cyan);
+}
+
+html[data-skin]:not([data-skin="classic"]) .bubble-user {
+  background: linear-gradient(135deg, var(--c-cyan), var(--skin-accent-2));
+  color: var(--skin-on-accent);
+  border-radius: 18px 18px 4px 18px;
+  padding: 10px 16px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--c-cyan) 60%, transparent);
+}
+
+html[data-skin]:not([data-skin="classic"]) .bubble-agent {
+  border-left: 0;
+  padding: 14px 18px;
+  background: var(--skin-glass);
+  border: 1px solid color-mix(in srgb, var(--c-line) 80%, transparent);
+  border-radius: 4px 18px 18px 18px;
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+html[data-skin]:not([data-skin="classic"]) .composer-input {
+  border-radius: 999px;
+  padding: 13px 22px;
+  background: var(--skin-glass);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 24px -14px rgba(0, 0, 0, 0.5);
+}
+html[data-skin]:not([data-skin="classic"]) .composer-input:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-cyan) 30%, transparent);
+}
+
+html[data-skin]:not([data-skin="classic"]) .scope-btn {
+  filter: drop-shadow(0 0 26px color-mix(in srgb, var(--c-cyan) 42%, transparent));
+}
+
+html[data-skin]:not([data-skin="classic"]) .empty-hero {
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+/* Primary buttons: accent gradient. */
+html[data-skin]:not([data-skin="classic"]) .bg-cyan {
+  background-image: linear-gradient(135deg, var(--c-cyan), var(--skin-accent-2));
+  color: var(--skin-on-accent);
+}
+
+/* Sunrise: a bold indigo sidebar with light text for contrast against the warm page.
+   :root raises specificity above the shared glass-panel rule. */
+html:root[data-skin="sunrise"] .app-sidebar {
+  --c-ink: #ffffff;
+  --c-muted: rgba(255, 255, 255, 0.78);
+  --c-panel: rgba(255, 255, 255, 0.14);
+  --c-line: rgba(255, 255, 255, 0.24);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-panel: var(--c-panel);
+  --color-line: var(--c-line);
+  background: linear-gradient(165deg, #5b4dff 0%, #7c3aed 100%);
+  color: #ffffff;
+  border-right: 0;
+}
+html:root[data-skin="sunrise"] .app-sidebar .brand {
+  background: none;
+  color: #ffffff;
+}
+html:root[data-skin="sunrise"] .app-sidebar [aria-current="true"] {
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 3px 0 0 #ffd6a8;
+}

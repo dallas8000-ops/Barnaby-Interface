@@ -65,13 +65,13 @@ export function App() {
   }
 
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_340px]">
+    <div className="app-shell grid h-full grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_340px]">
       <div className="hidden md:block">
         <Sidebar onSettings={() => setDialog("settings")} onProfile={() => setDialog("profile")} />
       </div>
-      <main className="flex min-h-0 min-w-0 flex-col">
+      <main className="app-main flex min-h-0 min-w-0 flex-col">
         <Conversation />
-        <div className="flex flex-col items-center gap-4 border-t border-line bg-bg px-4 pt-5 pb-4">
+        <div className="app-console flex flex-col items-center gap-4 border-t border-line bg-bg px-4 pt-5 pb-4">
           <ChainProgress />
           <ScopeConsole size={remote ? 240 : undefined} />
           <Composer />

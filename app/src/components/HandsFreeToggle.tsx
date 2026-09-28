@@ -27,7 +27,7 @@ export function HandsFreeToggle() {
           ? "Hands-free is on but the microphone couldn't be opened. Check Settings → Microphone."
           : "Talk without holding a key. A pause sends what you said."
       }
-      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 text-xs font-medium disabled:opacity-40 ${
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-0.5 text-xs font-medium disabled:opacity-40 ${
         failed
           ? "border-amber text-amber"
           : enabled

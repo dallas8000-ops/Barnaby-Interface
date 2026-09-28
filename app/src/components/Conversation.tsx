@@ -65,7 +65,7 @@ export function Conversation() {
   if (!turns.length) {
     return (
       <div className="flex flex-1 items-center justify-center px-6">
-        <p className="max-w-md text-center text-muted">
+        <p className="empty-hero max-w-md text-center text-muted">
           {remote ? "Hold the circle" : "Hold Space"} and say what you want done in{" "}
           <span className="text-ink">{folderName(workspace)}</span>. For
           example: “run the tests and fix whatever fails”.
@@ -82,10 +82,10 @@ export function Conversation() {
             {turn.system ? (
               <p className="text-xs text-muted">You answered the approval request.</p>
             ) : (
-              <p className="self-end max-w-[85%] rounded-lg rounded-br-sm bg-raised px-3.5 py-2 text-ink">{turn.text}</p>
+              <p className="bubble-user self-end max-w-[85%] rounded-lg rounded-br-sm bg-raised px-3.5 py-2 text-ink">{turn.text}</p>
             )}
             {(turn.assistant || turn.status !== "ok") && (
-              <div className="border-l-2 border-cyan/60 pl-4">
+              <div className="bubble-agent border-l-2 border-cyan/60 pl-4">
                 {turn.assistant ? (
                   <Markdown text={turn.assistant} />
                 ) : turn.status === "running" ? (

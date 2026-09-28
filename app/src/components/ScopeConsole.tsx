@@ -56,7 +56,7 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
         aria-pressed={engineState === "listening" || tabletRecording}
         data-testid="ptt"
         disabled={connection !== "open"}
-        className="rounded-full touch-none select-none disabled:opacity-50 transition-transform active:scale-[0.985]"
+        className="scope-btn rounded-full touch-none select-none disabled:opacity-50 transition-transform active:scale-[0.985]"
         onPointerDown={(e) => {
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           press();

@@ -496,3 +496,15 @@ describe("Second review: touch and tablet-only UI", () => {
     expect(sent).toContainEqual({ type: "stop_speaking" });
   });
 });
+
+describe("Style picker", () => {
+  it("is offered on the tablet too and applies at once", async () => {
+    useApp.setState({ role: "remote", config: { workspace: "C:/proj", review_transcripts: true } as never });
+    render(<SettingsDialog onClose={() => {}} />);
+    const style = screen.getByLabelText("Style") as HTMLSelectElement;
+    fireEvent.change(style, { target: { value: "sunrise" } });
+    expect(document.documentElement.dataset.skin).toBe("sunrise");
+    expect(localStorage.getItem("barnaby.skin")).toBe("sunrise");
+    localStorage.clear();
+  });
+});
