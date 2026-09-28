@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { ENGINE_QUERY } from "../playwright.config";
+import { ENGINE_QUERY, TABLET_PORT } from "../playwright.config";
 
 // The engine is shared across tests (one process), so each test starts a new session.
 async function fresh(page: Page) {
@@ -194,4 +194,71 @@ test("Devin: key saved in Settings enables Devin, which runs a turn; removing th
   await page.keyboard.press("Escape");
   await expect(devin).toBeDisabled();
   await expect(page.getByRole("radio", { name: "Claude" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("tablet: pair by QR link, hold to talk, approve on the tablet, hear it there, removed from the PC", async ({ page, browser }) => {
+  // PC window: tablet access is on (see playwright.config); make a pairing link.
+  await fresh(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByText(`On, port ${TABLET_PORT}`)).toBeVisible({ timeout: 15_000 });
+  await dialog.getByRole("button", { name: "Pair a tablet" }).click();
+  await expect(dialog.getByTestId("pair-qr")).toBeVisible();
+  const link = await dialog.locator("p.font-mono").innerText();
+  const code = new URL(link).hash; // #pair=...
+  expect(code).toMatch(/^#pair=[A-Za-z0-9_-]{16,}$/);
+  await page.keyboard.press("Escape");
+
+  // The tablet: its own browser context, like a separate device. The test machine's LAN
+  // address may be unroutable here, so open the same server on loopback.
+  const tablet = await browser.newContext({
+    ignoreHTTPSErrors: true, // trust of Barnaby's CA chain is covered by the engine's TLS tests
+    viewport: { width: 1280, height: 800 },
+    hasTouch: true,
+    permissions: ["microphone"],
+    userAgent: "Mozilla/5.0 (Linux; Android 15; SM-X820) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36",
+  });
+  await tablet.addInitScript(() => {
+    const spoken: string[] = [];
+    (window as unknown as { __spoken: string[] }).__spoken = spoken;
+    const fake = { speak: (u: { text: string }) => spoken.push(u.text), cancel: () => {} };
+    Object.defineProperty(window, "speechSynthesis", { value: fake, configurable: true });
+  });
+  const t = await tablet.newPage();
+  await t.goto(`https://127.0.0.1:${TABLET_PORT}/${code}`);
+  await expect(t.getByTestId("caption")).toHaveText("Hold the circle to talk", { timeout: 15_000 });
+  expect(new URL(t.url()).hash).toBe(""); // the one-time code was removed from the address bar
+
+  // The PC lists the tablet as connected.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(dialog.getByTestId("tablet-device")).toContainText("Galaxy Tab");
+  await expect(dialog.getByTestId("tablet-device")).toContainText("connected");
+  await page.keyboard.press("Escape");
+
+  // Hold to talk on the tablet (Chromium's fake microphone), release to send.
+  const ptt = t.getByTestId("ptt");
+  await ptt.hover();
+  await t.mouse.down();
+  await expect(t.getByTestId("caption")).toHaveText("Listening. Release to send.");
+  await t.waitForTimeout(1500);
+  await t.mouse.up();
+  // Review mode: the PC transcribed it; the draft appears on the tablet.
+  const draft = t.getByLabel(/check what i heard/i);
+  // "specs" when the earlier voice-profile test ran first: learned corrections apply to tablet audio too.
+  await expect(draft).toHaveValue(/^run the (tests|specs) and fix anything failing$/, { timeout: 15_000 });
+  await t.getByRole("button", { name: /^Send/ }).click();
+
+  // The scripted turn asks to push: approve-or-decline on the tablet.
+  await expect(t.getByTestId("approval")).toBeVisible({ timeout: 15_000 });
+  await t.getByRole("button", { name: "Decline" }).click();
+  await expect(t.getByTestId("caption")).toHaveText("Hold the circle to talk", { timeout: 15_000 });
+  const spoken = await t.evaluate(() => (window as unknown as { __spoken: string[] }).__spoken);
+  expect(spoken.length).toBeGreaterThan(0); // replies spoken by the tablet's own voice
+
+  // Remove the tablet on the PC: it's disconnected and asked to pair again.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await dialog.getByRole("button", { name: "Remove Galaxy Tab" }).click();
+  await expect(t.getByTestId("pair-screen")).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByTestId("tablet-device")).toHaveCount(0);
+  await tablet.close();
 });

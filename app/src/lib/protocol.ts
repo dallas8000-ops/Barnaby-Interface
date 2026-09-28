@@ -15,6 +15,25 @@ export type ComponentStatus = "loading" | "ready" | "error";
 export type Editor = "vscode" | "cursor";
 export type AgentEngine = "claude" | "cursor" | "devin";
 export type SecretName = "devin";
+export type ClientRole = "desktop" | "remote";
+
+export interface TabletDevice {
+  id: string;
+  name: string;
+  created: number;
+  last_seen: number;
+  connected: boolean;
+}
+
+export interface TabletStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  urls: string[];
+  devices: TabletDevice[];
+  ca_fingerprint?: string;
+  error?: string;
+}
 
 export interface EngineInfo {
   name: AgentEngine;
@@ -33,6 +52,8 @@ export interface TemplateSummary {
 export type ChainEndReason = "completed" | "failed" | "declined" | "cancelled" | "interrupted" | "limit";
 
 export interface Config {
+  tablet_access?: boolean;
+  tablet_port?: number;
   workspace: string;
   claude_model: string;
   engine: AgentEngine;
@@ -88,6 +109,8 @@ export type EngineEvent =
       templates?: TemplateSummary[];
       handsfree?: boolean;
       secrets?: Record<SecretName, boolean>;
+      tablet?: TabletStatus;
+      role?: ClientRole;
       session_id: string | null;
       speaking: boolean;
       sessions: SessionSummary[];
@@ -114,6 +137,12 @@ export type EngineEvent =
   | { type: "learned"; heard: string; meant: string }
   | { type: "devices"; items: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[] }
   | { type: "secrets"; items: Record<SecretName, boolean> }
+  | { type: "paired"; token: string; device_id: string }
+  | { type: "pair_error"; message: string }
+  | { type: "say"; text: string }
+  | { type: "say_stop" }
+  | ({ type: "tablet_status" } & TabletStatus)
+  | { type: "tablet_pairing"; url: string; expires_at: number }
   | { type: "engines"; items: EngineInfo[] }
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
@@ -159,4 +188,7 @@ export type Command =
   // The key goes to the engine once and is never sent back: only whether one is saved.
   | { type: "set_secret"; name: SecretName; value: string }
   | { type: "delete_secret"; name: SecretName }
+  | { type: "audio_clip"; pcm_b64: string }
+  | { type: "tablet_pair_start" }
+  | { type: "tablet_revoke"; device_id: string }
   | { type: "ping" };

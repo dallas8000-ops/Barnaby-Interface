@@ -150,12 +150,45 @@ class DeleteSecret(_Cmd):
     name: Literal["devin"]
 
 
+MAX_CLIP_S = 60
+MAX_CLIP_B64 = 4 * ((MAX_CLIP_S * 16_000 * 2 + 2) // 3)  # 16 kHz mono int16, base64
+
+
+class AudioClip(_Cmd):
+    """A hold-to-talk recording from a paired tablet (16 kHz mono int16 LE, base64)."""
+    type: Literal["audio_clip"]
+    pcm_b64: str = Field(min_length=4, max_length=MAX_CLIP_B64)
+
+
+class TabletPairStart(_Cmd):
+    type: Literal["tablet_pair_start"]
+
+
+class TabletRevoke(_Cmd):
+    type: Literal["tablet_revoke"]
+    device_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class Pair(_Cmd):
+    """First frame from a tablet that isn't paired yet. Only the tablet listener accepts it."""
+    type: Literal["pair"]
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=60, pattern=r"^[\w .()'-]+$")
+
+
+_pair_adapter: TypeAdapter[Pair] = TypeAdapter(Pair)
+
+
+def parse_pair(raw: str | bytes) -> Pair:
+    return _pair_adapter.validate_json(raw)
+
+
 Command = Annotated[
     Union[
         Auth, PttStart, PttStop, TextSubmit, Cancel, StopSpeaking, Approve, Deny,
         NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
-        ListTemplates, RunTemplate, SetSecret, DeleteSecret,
+        ListTemplates, RunTemplate, SetSecret, DeleteSecret, AudioClip, TabletPairStart, TabletRevoke,
     ],
     Field(discriminator="type"),
 ]

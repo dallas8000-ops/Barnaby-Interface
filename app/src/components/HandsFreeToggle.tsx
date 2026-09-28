@@ -11,7 +11,9 @@ export function HandsFreeToggle() {
   const enabled = useApp((s) => Boolean(s.config?.continuous_mode_enabled));
   const active = useApp((s) => s.continuousMode);
   const connection = useApp((s) => s.connection);
+  const remote = useApp((s) => s.role === "remote");
   const failed = enabled && !active && connection === "open";
+  if (remote) return null; // hands-free uses the PC's microphone
 
   return (
     <button

@@ -44,7 +44,11 @@ export function HoldButton({ ms = 1200, onConfirm, children, disabled }: {
       type="button"
       disabled={disabled}
       aria-label={`${typeof children === "string" ? children : "Confirm"}. Press and hold to confirm.`}
-      onPointerDown={begin}
+      onPointerDown={(e) => {
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        begin();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerUp={stop}
       onPointerLeave={stop}
       onPointerCancel={stop}
@@ -56,7 +60,9 @@ export function HoldButton({ ms = 1200, onConfirm, children, disabled }: {
       }}
       onKeyUp={stop}
       onClick={(e) => e.preventDefault()}
-      className="relative overflow-hidden rounded-md border border-red px-3 py-1.5 text-sm font-medium text-red disabled:opacity-50"
+      // touch-none/select-none: on a tablet, Android's long-press would otherwise select text or
+      // scroll and cancel the pointer before the hold completes.
+      className="relative touch-none select-none overflow-hidden rounded-md border border-red px-3 py-1.5 text-sm font-medium text-red disabled:opacity-50"
     >
       <span
         aria-hidden

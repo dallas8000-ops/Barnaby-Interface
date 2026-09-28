@@ -26,6 +26,7 @@ from .agent import AgentError, ClaudeCodeAgent, resolve_claude
 from .cursor_agent import CursorAgent, resolve_cursor
 from .devin_agent import DevinAgent, DevinClient
 from .vault import MemoryCredentials, Vault, VaultError
+from .remote import RemoteServer
 from .config import resolve_workflows_dir, Config, data_dir
 from .orchestrator import Orchestrator
 from .server import Bridge, allowed_origins_from_env
@@ -153,7 +154,13 @@ async def amain(args: argparse.Namespace) -> None:
                         transcriber=transcriber, speaker=speaker, agents=agents, engine_available=available,
                         templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
-                        transcriber_factory=tfactory, speaker_factory=sfactory, vault=vault)
+                        transcriber_factory=tfactory, speaker_factory=sfactory, vault=vault,
+                        emit_desktop=bridge.emit_desktop,
+                        tablet_factory=lambda port, on_change: RemoteServer(
+                            bridge, data_dir=data_dir() / "tablet", port=port, on_change=on_change,
+                            # --mock (UI dev / E2E) runs a scripted agent; don't depend on the
+                            # test machine's Windows network category.
+                            **({"network_check": lambda: None} if args.mock else {})))
     bridge.orchestrator = orch
 
     server = await bridge.serve(port=args.port)

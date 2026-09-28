@@ -37,7 +37,8 @@ from .editors import EditorError, open_in_editor
 from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft,
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
                        ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
-                       DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TextSubmit, UpdateCorrection,
+                       AudioClip, DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TabletPairStart,
+                       TabletRevoke, TextSubmit, UpdateCorrection,
                        ev, ev_error, ev_state,
                        ev_wake_word_detected, ev_continuous_mode_changed,
                        ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
@@ -209,7 +210,9 @@ class Orchestrator:
                  workflows: Any = None,
                  transcriber_factory: Callable[[Config], Transcriber] | None = None,
                  speaker_factory: Callable[[Config], Speaker] | None = None,
-                 vault: Vault | None = None) -> None:
+                 vault: Vault | None = None,
+                 emit_desktop: Emit | None = None,
+                 tablet_factory: Callable[[int, Callable[[], None]], Any] | None = None) -> None:
         self.config = config
         self.store = store
         self.profile = profile
@@ -232,6 +235,13 @@ class Orchestrator:
         self._speaker_factory = speaker_factory
         # Cloud agents' API keys. Tests get an in-memory vault, never the real Windows store.
         self.vault = vault or Vault(MemoryCredentials())
+        # Tablet access: events only the PC window may see (pairing links), and the
+        # LAN server, created on demand from settings.
+        self._emit_desktop = emit_desktop or emit
+        self._tablet_factory = tablet_factory
+        self._tablet: Any = None
+        self._tablet_error: str | None = None
+        self._remote_listeners = 0
 
         self.state = State.IDLE
         self.session_id: str | None = None
@@ -267,9 +277,11 @@ class Orchestrator:
         self._refresh_project_terms()
         asyncio.create_task(self._preload())
         await self._apply_handsfree()
+        await self._apply_tablet(announce=False)
 
     async def shutdown(self) -> None:
         self._stop_handsfree()
+        await self._stop_tablet()
         await self._cancel_turn()
         self.speaker.stop()
         if self._speech_task:
@@ -277,7 +289,7 @@ class Orchestrator:
 
     async def hello(self) -> dict[str, Any]:
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
-                  templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(),
+                  templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(), tablet=self._tablet_status(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components)
 
@@ -362,6 +374,14 @@ class Orchestrator:
                     open_in_editor(editor, self.config.workspace, path, line)
                 except EditorError as exc:
                     await self.emit(ev_error("editor", str(exc)))
+            case AudioClip(pcm_b64=pcm):
+                await self._audio_clip(pcm)
+            case TabletPairStart():
+                await self._tablet_pair_start()
+            case TabletRevoke(device_id=device_id):
+                if self._tablet is not None:
+                    await self._tablet.revoke(device_id)
+                await self._emit_tablet_status()
             case SetSecret(name=name, value=value):
                 await self._set_secret(name, value.get_secret_value())
             case DeleteSecret(name=name):
@@ -431,10 +451,12 @@ class Orchestrator:
             await self._set_state(resting)
             return
 
-        await self._set_state(State.TRANSCRIBING)
-        prompt = lexicon.build_prompt(self._project_terms + self.profile.vocabulary())
+        # Claim the transcriber before the first await: callers check _transcribing and
+        # then call here with no await in between, so two clips can't both get through.
         self._transcribing = True
         try:
+            await self._set_state(State.TRANSCRIBING)
+            prompt = lexicon.build_prompt(self._project_terms + self.profile.vocabulary())
             raw = await asyncio.wait_for(
                 asyncio.get_running_loop().run_in_executor(None, self.transcriber.transcribe, audio, prompt),
                 timeout=STT_TIMEOUT_S)
@@ -891,12 +913,19 @@ class Orchestrator:
         while not self._speech_q.empty():
             self._speech_q.get_nowait()
         self.speaker.stop()
+        if self._remote_listeners and self._loop is not None:
+            self._loop.create_task(self.emit(ev("say_stop")))
 
     async def _speech_worker(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
             gen, sentence = await self._speech_q.get()
             if gen != self._speech_gen:
+                continue
+            if self._remote_listeners:
+                # A tablet is connected: it speaks with its own voice. It gets the same
+                # capped, secret-redacted sentences the PC would have spoken.
+                await self.emit(ev("say", text=sentence))
                 continue
             if not self._speaking:
                 self._speaking = True
@@ -960,6 +989,8 @@ class Orchestrator:
         if hasattr(self.recorder, "device"):
             self.recorder.device = self.config.input_device  # type: ignore[attr-defined]
         await self.emit(ev("config", config=after, rejected=rejected))
+        if (before.get("tablet_access"), before.get("tablet_port")) != (after.get("tablet_access"), after.get("tablet_port")):
+            await self._apply_tablet()
 
     def _apply_models(self) -> None:
         # Settings changes must reach the live agents (previously the model was
@@ -968,6 +999,104 @@ class Orchestrator:
             agent = self.agents.get(name)
             if agent is not None and hasattr(agent, "model"):
                 agent.model = model  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------ tablet access
+    def remote_check(self, cmd: Command) -> str | None:
+        """Extra checks for tablet commands that need engine state (the hub has already
+        applied the role policy). Opening a session switches to its project folder,
+        which only the PC may do, so a tablet can open sessions of the current project only."""
+        if isinstance(cmd, LoadSession):
+            session = self.store.get_session(cmd.session_id)
+            if session and session.get("workspace") and session["workspace"] != self.config.workspace:
+                return "That session belongs to another project. Open it on the PC."
+        return None
+
+    def set_remote_listeners(self, count: int) -> None:
+        """Called by the hub as tablets connect and leave."""
+        self._remote_listeners = count
+
+    def _tablet_status(self) -> dict[str, Any]:
+        t = self._tablet
+        running = bool(t is not None and t.running)
+        status: dict[str, Any] = {
+            "enabled": self.config.tablet_access, "running": running,
+            "port": t.port if running else self.config.tablet_port,
+            "urls": t.urls() if running else [],
+            "devices": t.devices() if t is not None else [],
+        }
+        if running:
+            try:
+                status["ca_fingerprint"] = t.ca_fingerprint()
+            except Exception:  # noqa: BLE001 - informational only
+                pass
+        if self._tablet_error:
+            status["error"] = self._tablet_error
+        return status
+
+    async def _emit_tablet_status(self) -> None:
+        await self.emit(ev("tablet_status", **self._tablet_status()))
+
+    async def _stop_tablet(self) -> None:
+        tablet, self._tablet = self._tablet, None
+        if tablet is not None:
+            await tablet.stop()
+
+    async def _apply_tablet(self, announce: bool = True) -> None:
+        """Start, stop or restart the LAN server to match settings."""
+        want = self.config.tablet_access and self._tablet_factory is not None
+        current = self._tablet
+        if current is not None and (not want or current.port_requested != self.config.tablet_port):
+            await self._stop_tablet()
+        self._tablet_error = None
+        if want and self._tablet is None:
+            loop = asyncio.get_running_loop()
+
+            def changed() -> None:
+                loop.call_soon_threadsafe(lambda: loop.create_task(self._emit_tablet_status()))
+
+            tablet = self._tablet_factory(self.config.tablet_port, changed)
+            try:
+                await tablet.start()
+                self._tablet = tablet
+            except OSError as exc:
+                in_use = getattr(exc, "errno", None) in (48, 98, 10048) or "in use" in str(exc).lower()
+                self._tablet_error = (f"Port {self.config.tablet_port} is already in use. Pick another port."
+                                      if in_use else f"Tablet access couldn't start: {exc}")
+                log.warning("tablet access failed to start: %s", exc)
+            except ImportError:
+                self._tablet_error = ("Tablet access needs the 'cryptography' package. In the engine folder run: "
+                                      ".venv\\Scripts\\python -m pip install cryptography")
+            except Exception as exc:  # noqa: BLE001 - e.g. certificate generation
+                self._tablet_error = f"Tablet access couldn't start: {exc}"
+                log.exception("tablet access failed to start")
+        if announce or self._tablet_error:
+            await self._emit_tablet_status()
+
+    async def _tablet_pair_start(self) -> None:
+        if self._tablet is None or not self._tablet.running:
+            await self.emit(ev_error("tablet", "Turn on Tablet access in Settings first."))
+            return
+        url, expires = self._tablet.start_pairing()
+        # The link carries a one-time code: it goes to the PC window only, never to tablets.
+        await self._emit_desktop(ev("tablet_pairing", url=url, expires_at=expires))
+
+    async def _audio_clip(self, pcm_b64: str) -> None:
+        """A hold-to-talk recording from a paired tablet: 16 kHz mono int16 LE."""
+        import base64
+        import binascii
+        try:
+            raw = base64.b64decode(pcm_b64, validate=True)
+        except (binascii.Error, ValueError):
+            await self.emit(ev_error("audio", "The tablet sent audio I couldn't read."))
+            return
+        if len(raw) % 2:
+            await self.emit(ev_error("audio", "The tablet sent audio I couldn't read."))
+            return
+        if self._recording or self._transcribing:
+            await self.emit(ev("notice", message="Still working out your last recording."))
+            return
+        audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        await self._process_audio(audio)
 
     async def _set_secret(self, name: str, value: str | None) -> None:
         """Save or remove a key. Only the outcome is reported, never the value."""

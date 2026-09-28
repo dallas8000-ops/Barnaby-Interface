@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EngineClient, type ConnectionStatus } from "./engine";
+import { EngineClient, type ConnectionStatus, type EngineEndpoint } from "./engine";
+import { PairingNeeded } from "./remote";
 
 class FakeSocket {
   static OPEN = 1;
@@ -112,5 +113,118 @@ describe("EngineClient", () => {
     await flush();
     sockets[0]!.onmessage?.({ data: "{not json" });
     expect(got).toEqual([]);
+  });
+});
+
+describe("EngineClient pairing (tablet)", () => {
+  let sockets: FakeSocket[];
+  let statuses: ConnectionStatus[];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    sockets = [];
+    statuses = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  const make = (endpoint: () => Promise<EngineEndpoint>) => {
+    const c = new EngineClient(endpoint, (url) => {
+      const s = new FakeSocket(url);
+      sockets.push(s);
+      return s as unknown as WebSocket;
+    });
+    c.onStatus((s) => statuses.push(s));
+    return c;
+  };
+
+  it("sends a pair frame, hands the token over, then opens on hello", async () => {
+    const paired: string[] = [];
+    const c = make(async () => ({
+      url: "wss://pc/ws",
+      pair: { code: "CODE", name: "Galaxy Tab" },
+      onPaired: (t: string) => paired.push(t),
+    }));
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.open();
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({ type: "pair", code: "CODE", name: "Galaxy Tab" });
+    sockets[0]!.receive({ type: "paired", token: "TOKEN", device_id: "dev_1" });
+    expect(paired).toEqual(["TOKEN"]);
+    sockets[0]!.receive({ type: "hello" });
+    expect(statuses.at(-1)).toBe("open");
+    c.stop();
+  });
+
+  it.each([4403, 4409])("treats close %i (removed / no room) as terminal", async (code) => {
+    const c = make(async () => ({ url: "wss://pc/ws", token: "t" }));
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.drop(code);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(1);
+    expect(statuses.at(-1)).toBe("unauthorized");
+    c.stop();
+  });
+
+  it("does not retry while pairing is needed", async () => {
+    const c = make(async () => {
+      throw new PairingNeeded();
+    });
+    c.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(0);
+    expect(statuses.at(-1)).toBe("unpaired");
+    c.stop();
+  });
+});
+
+describe("EngineClient close codes (second review)", () => {
+  let sockets: FakeSocket[];
+  let statuses: ConnectionStatus[];
+  let events: { type: string; message?: string }[];
+  let c: EngineClient;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    sockets = [];
+    statuses = [];
+    events = [];
+    c = new EngineClient(async () => ({ url: "wss://pc/ws", token: "t" }), (url) => {
+      const s = new FakeSocket(url);
+      sockets.push(s);
+      return s as unknown as WebSocket;
+    });
+    c.onStatus((s) => statuses.push(s));
+    c.onEvent((e) => events.push(e as never));
+  });
+  afterEach(() => {
+    c.stop();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("1001 (the PC stopped tablet access) reconnects and is not a removal", async () => {
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.drop(1001);
+    expect(statuses.at(-1)).toBe("closed");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets.length).toBeGreaterThan(1);
+    expect(statuses).not.toContain("unauthorized");
+  });
+
+  it.each([
+    [4429, /failed attempts/],
+    [4430, /tablets connected/],
+  ])("%i stops retrying and says why, without dropping the pairing", async (code, message) => {
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.drop(code);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sockets).toHaveLength(1);
+    expect(statuses.at(-1)).toBe("closed");
+    expect(events.at(-1)?.message).toMatch(message);
   });
 });

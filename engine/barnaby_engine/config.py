@@ -58,6 +58,8 @@ class Config:
     max_spoken_chars: int = 700          # longer replies: speak the head, show the rest
     review_transcripts: bool = True      # show editable transcript before sending
     save_voice_samples: bool = False     # opt-in: keep audio+corrected text for fine-tuning
+    tablet_access: bool = False          # serve a paired tablet over HTTPS on the LAN (off by default)
+    tablet_port: int = 8766              # fixed so the tablet's bookmark keeps working
     safe_bash: list[str] = field(default_factory=lambda: list(DEFAULT_SAFE_BASH))
     turn_timeout_s: int = 900
     
@@ -89,7 +91,7 @@ class Config:
     UI_MUTABLE = frozenset({
         "workspace", "claude_model", "engine", "cursor_model", "continuous_mode_enabled", "continuous_mode_timeout", "whisper_model", "whisper_device", "input_device",
         "tts_enabled", "tts_voice", "tts_speed", "max_spoken_chars",
-        "review_transcripts", "save_voice_samples",
+        "review_transcripts", "save_voice_samples", "tablet_access", "tablet_port",
     })
 
     @classmethod
@@ -186,4 +188,6 @@ _VALIDATORS: dict[str, Any] = {
     "max_spoken_chars": lambda v: _is_int(v) and 0 <= v <= 5000,
     "review_transcripts": lambda v: isinstance(v, bool),
     "save_voice_samples": lambda v: isinstance(v, bool),
+    "tablet_access": lambda v: isinstance(v, bool),
+    "tablet_port": lambda v: _is_int(v) and 1024 <= v <= 65535,
 }

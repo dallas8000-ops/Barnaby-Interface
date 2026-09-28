@@ -11,6 +11,7 @@ dependencies = [
     "websockets>=15,<16",
     "pydantic>=2.7,<3",
     "numpy>=1.26",
+    "cryptography>=42",  # tablet access: local CA + TLS certificate
 ]
 
 [project.optional-dependencies]

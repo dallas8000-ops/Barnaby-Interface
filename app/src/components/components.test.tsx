@@ -388,3 +388,111 @@ describe("EngineSwitch with Devin", () => {
     expect(devin).toHaveAttribute("title", expect.stringContaining("Settings → Devin"));
   });
 });
+
+describe("Tablet access (PC Settings)", () => {
+  const running = { enabled: true, running: true, port: 8766, urls: ["https://192.168.1.20:8766/"],
+    devices: [{ id: "dev_1", name: "Galaxy Tab", created: 1, last_seen: Date.now() / 1000, connected: true }],
+    ca_fingerprint: "AB:CD" };
+
+  it("pairs with a QR code, shows its countdown, and removes a tablet", async () => {
+    const { TabletAccessSection } = await import("./TabletAccessSection");
+    useApp.setState({ tablet: running, tabletPairing: null });
+    const toggled: boolean[] = [];
+    const { rerender } = render(<TabletAccessSection enabled onToggle={(v) => toggled.push(v)} />);
+    expect(screen.getByText("https://192.168.1.20:8766/")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Pair a tablet" }));
+    expect(sent).toContainEqual({ type: "tablet_pair_start" });
+
+    act(() => useApp.setState({ tabletPairing: { url: "https://192.168.1.20:8766/#pair=abcdefghijklmnop", expiresAt: Date.now() / 1000 + 300 } }));
+    rerender(<TabletAccessSection enabled onToggle={(v) => toggled.push(v)} />);
+    const qr = screen.getByTestId("pair-qr");
+    expect(qr.querySelector("path")!.getAttribute("d")!.length).toBeGreaterThan(100);
+    expect(screen.getByText(/Works once, for [45]:\d\d more/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove Galaxy Tab" }));
+    expect(sent).toContainEqual({ type: "tablet_revoke", device_id: "dev_1" });
+    await userEvent.click(screen.getByRole("switch", { name: "Tablet access" }));
+    expect(toggled).toEqual([false]);
+  });
+
+  it("an expired pairing link falls back to the Pair button", async () => {
+    const { TabletAccessSection } = await import("./TabletAccessSection");
+    useApp.setState({ tablet: running, tabletPairing: { url: "https://x/#pair=old", expiresAt: Date.now() / 1000 - 1 } });
+    render(<TabletAccessSection enabled onToggle={() => {}} />);
+    expect(screen.queryByTestId("pair-qr")).toBeNull();
+    expect(screen.getByRole("button", { name: "Pair a tablet" })).toBeInTheDocument();
+  });
+
+  it("shows why it couldn't start", async () => {
+    const { TabletAccessSection } = await import("./TabletAccessSection");
+    useApp.setState({ tablet: { ...running, running: false, urls: [], error: "Your network is set to Public in Windows." } });
+    render(<TabletAccessSection enabled onToggle={() => {}} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Public");
+    expect(screen.queryByRole("button", { name: "Pair a tablet" })).toBeNull();
+  });
+});
+
+describe("Settings on a tablet", () => {
+  it("offers only what a tablet may change", async () => {
+    useApp.setState({ role: "remote", config: { workspace: "C:/proj", review_transcripts: true } as never });
+    render(<SettingsDialog onClose={() => {}} />);
+    expect(screen.queryByLabelText("Microphone")).toBeNull();
+    expect(screen.queryByPlaceholderText("apk_user_…")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Tablet access" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Review before sending/ }));
+    expect(sent).toEqual([{ type: "set_config", values: { review_transcripts: false } }]);
+  });
+});
+
+describe("PairScreen", () => {
+  it("explains a failed pairing", async () => {
+    const { PairScreen } = await import("./PairScreen");
+    useApp.setState({ connection: "unauthorized", pairError: null });
+    render(<PairScreen onRetry={() => {}} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/expired or was already used/);
+    expect(screen.getByRole("link", { name: "Barnaby's certificate" })).toHaveAttribute("href", "/barnaby-ca.crt");
+  });
+
+  it("shows the PC's reason when pairing is refused", async () => {
+    const { PairScreen } = await import("./PairScreen");
+    useApp.setState({ connection: "unauthorized", pairError: "This PC already has 10 paired tablets." });
+    render(<PairScreen onRetry={() => {}} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("10 paired tablets");
+  });
+});
+
+describe("Second review: touch and tablet-only UI", () => {
+  it("HoldButton survives an Android long-press (no context menu, no scroll/selection)", async () => {
+    const { HoldButton } = await import("./HoldButton");
+    render(<HoldButton onConfirm={() => {}}>Push</HoldButton>);
+    const btn = screen.getByRole("button", { name: /Press and hold/ });
+    expect(btn.className).toMatch(/touch-none/);
+    expect(btn.className).toMatch(/select-none/);
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    btn.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("the tablet doesn't show PC-only controls", async () => {
+    const { Sidebar } = await import("./Sidebar");
+    useApp.setState({ role: "remote", engines: [{ name: "claude", available: true }, { name: "cursor", available: true }] });
+    render(<Sidebar onSettings={() => {}} onProfile={() => {}} />);
+    expect(screen.queryByRole("button", { name: /proj/ })).toBeNull(); // the folder picker
+    expect(screen.getByText("proj")).toBeInTheDocument(); // shown, read-only
+    expect(screen.queryByRole("button", { name: /Voice profile/ })).toBeNull();
+    render(<HandsFreeToggle />);
+    expect(screen.queryByRole("switch", { name: /Hands-free/ })).toBeNull();
+  });
+
+  it("Quiet on the tablet stops its own voice and the engine's queue", async () => {
+    const tabletSpeech = await import("../lib/tabletSpeech");
+    const stop = vi.fn();
+    vi.spyOn(tabletSpeech, "getTabletSpeech").mockReturnValue({ stop } as never);
+    useApp.setState({ role: "remote", tabletSpeaking: true, speaking: false });
+    render(<ScopeConsole />);
+    await userEvent.click(screen.getByRole("button", { name: /Quiet/ }));
+    expect(stop).toHaveBeenCalled();
+    expect(sent).toContainEqual({ type: "stop_speaking" });
+  });
+});

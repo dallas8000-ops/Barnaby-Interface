@@ -136,3 +136,42 @@ describe("secrets and engines events", () => {
     expect(s.engines.map((e) => e.name)).toEqual(["claude", "devin"]);
   });
 });
+
+describe("tablet access state", () => {
+  const status = { enabled: true, running: true, port: 8766, urls: ["https://192.168.1.20:8766/"], devices: [] };
+
+  it("tracks role from hello and tablet status", () => {
+    const s = reduceEvent(initialState, { type: "hello", state: "idle", config: {} as never, session_id: null,
+      speaking: false, sessions: [], components: {} as never, protocol: 1, role: "remote", tablet: status });
+    expect(s.role).toBe("remote");
+    expect(s.tablet?.urls).toEqual(["https://192.168.1.20:8766/"]);
+  });
+
+  it("keeps the pairing link while running and drops it when tablet access stops", () => {
+    let s = reduceEvent(initialState, { type: "tablet_status", ...status });
+    s = reduceEvent(s, { type: "tablet_pairing", url: "https://x/#pair=abc", expires_at: 99 });
+    expect(s.tabletPairing).toEqual({ url: "https://x/#pair=abc", expiresAt: 99 });
+    s = reduceEvent(s, { type: "tablet_status", ...status, running: false });
+    expect(s.tabletPairing).toBeNull();
+  });
+
+  it("records a pairing error and ignores token and speech events", () => {
+    let s = reduceEvent(initialState, { type: "pair_error", message: "No room." });
+    expect(s.pairError).toBe("No room.");
+    const before = s;
+    for (const e of [{ type: "paired", token: "t", device_id: "d" }, { type: "say", text: "hi" }, { type: "say_stop" }] as const) {
+      s = reduceEvent(s, e);
+    }
+    expect(s).toBe(before);
+  });
+});
+
+describe("tablet pairing panel (second review)", () => {
+  it("drops the pairing link once a new tablet has paired with it", () => {
+    const base = { enabled: true, running: true, port: 8766, urls: [], devices: [] };
+    let s = reduceEvent(initialState, { type: "tablet_status", ...base });
+    s = reduceEvent(s, { type: "tablet_pairing", url: "https://x/#pair=abc", expires_at: 9e9 });
+    s = reduceEvent(s, { type: "tablet_status", ...base, devices: [{ id: "d", name: "Galaxy Tab", created: 1, last_seen: 1, connected: true }] });
+    expect(s.tabletPairing).toBeNull();
+  });
+});

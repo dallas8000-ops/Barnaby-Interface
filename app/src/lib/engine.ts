@@ -1,13 +1,23 @@
 import type { Command, EngineEvent } from "./protocol";
 
-export type ConnectionStatus = "connecting" | "open" | "closed" | "unauthorized";
+export type ConnectionStatus = "connecting" | "open" | "closed" | "unauthorized" | "unpaired";
 
 export interface EngineEndpoint {
   url: string;
-  token: string;
+  /** Desktop: the shell's process token. Tablet: the stored device token. */
+  token?: string;
+  /** Tablet, first visit: the one-time code from the QR link, sent in place of a token. */
+  pair?: { code: string; name: string };
+  onPaired?: (token: string, deviceId: string) => void;
 }
 
 type Listener = (event: EngineEvent) => void;
+
+/** Terminal refusals that aren't about the token: stop retrying, say why, keep the pairing. */
+const REFUSED: Record<number, string> = {
+  4429: "Too many failed attempts from this tablet. Try again in 10 minutes.",
+  4430: "The PC already has 4 tablets connected. Close Barnaby on one of them, then reload this page.",
+};
 type StatusListener = (status: ConnectionStatus) => void;
 
 /**
@@ -15,7 +25,9 @@ type StatusListener = (status: ConnectionStatus) => void;
  *
  * Close code 4401 (bad token) is terminal: retrying cannot succeed and would
  * hammer the engine. 4000 (replaced by a newer client) is also terminal, so two
- * windows don't ping-pong the single client slot forever.
+ * windows don't ping-pong the single client slot forever. For a tablet, 4403
+ * (device removed on the PC) and 4409 (no room to pair) are terminal too, and a
+ * missing pairing ("unpaired") never retries.
  */
 export class EngineClient {
   private ws: WebSocket | null = null;
@@ -77,7 +89,11 @@ export class EngineClient {
     let endpoint: EngineEndpoint;
     try {
       endpoint = await this.resolveEndpoint();
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "PairingNeeded") {
+        this.emitStatus("unpaired");
+        return;
+      }
       this.scheduleReconnect();
       return;
     }
@@ -87,13 +103,20 @@ export class EngineClient {
     let authed = false;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "auth", token: endpoint.token } satisfies Command));
+      const first = endpoint.pair
+        ? { type: "pair", code: endpoint.pair.code, name: endpoint.pair.name }
+        : { type: "auth", token: endpoint.token ?? "" };
+      ws.send(JSON.stringify(first));
     };
     ws.onmessage = (msg) => {
       let event: EngineEvent;
       try {
         event = JSON.parse(String(msg.data)) as EngineEvent;
       } catch {
+        return;
+      }
+      if (event.type === "paired") {
+        endpoint.onPaired?.(event.token, event.device_id);
         return;
       }
       if (!authed && event.type === "hello") {
@@ -106,8 +129,14 @@ export class EngineClient {
     ws.onclose = (ev) => {
       if (this.ws !== ws) return;
       this.ws = null;
-      if (ev.code === 4401 || ev.code === 4000) {
-        this.emitStatus(ev.code === 4401 ? "unauthorized" : "closed");
+      const refused = REFUSED[ev.code];
+      if (refused) {
+        this.emitStatus("closed");
+        this.listeners.forEach((fn) => fn({ type: "error", code: "connection", message: refused }));
+        return;
+      }
+      if (ev.code === 4401 || ev.code === 4403 || ev.code === 4409 || ev.code === 4000) {
+        this.emitStatus(ev.code === 4000 ? "closed" : "unauthorized");
         return;
       }
       this.emitStatus("closed");

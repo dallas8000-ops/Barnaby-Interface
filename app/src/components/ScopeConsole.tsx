@@ -1,6 +1,7 @@
 import { Square, VolumeX } from "lucide-react";
 import { send } from "../lib/client";
 import type { EngineState } from "../lib/protocol";
+import { getTabletSpeech } from "../lib/tabletSpeech";
 import { useApp } from "../store/app";
 import { Scope } from "./Scope";
 import { usePushToTalk } from "./usePushToTalk";
@@ -22,6 +23,9 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
   const connection = useApp((s) => s.connection);
   const stt = useApp((s) => s.components.stt);
   const handsFree = useApp((s) => s.continuousMode);
+  const remote = useApp((s) => s.role === "remote");
+  const tabletRecording = useApp((s) => s.tabletRecording);
+  const tabletSpeaking = useApp((s) => s.tabletSpeaking);
   const { press, release } = usePushToTalk();
 
   const busy = engineState === "thinking" || engineState === "transcribing";
@@ -30,6 +34,10 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
       ? connection === "unauthorized"
         ? "Engine rejected this window. Restart Barnaby."
         : "Connecting to the voice engine"
+      : remote && tabletRecording
+        ? "Listening. Release to send."
+        : remote && engineState === "idle"
+          ? "Hold the circle to talk"
       : stt.status === "loading" && engineState === "idle"
         ? "Loading speech model"
         : speaking && engineState === "thinking"
@@ -45,7 +53,7 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
       <button
         type="button"
         aria-label="Push to talk. Hold to record."
-        aria-pressed={engineState === "listening"}
+        aria-pressed={engineState === "listening" || tabletRecording}
         data-testid="ptt"
         disabled={connection !== "open"}
         className="rounded-full touch-none select-none disabled:opacity-50 transition-transform active:scale-[0.985]"
@@ -68,7 +76,7 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
           }
         }}
       >
-        <Scope state={engineState} level={level} speaking={speaking} size={size} />
+        <Scope state={remote && tabletRecording ? "listening" : engineState} level={level} speaking={speaking} size={size} />
       </button>
 
       <p className="font-strip text-[15px] font-medium text-muted h-6" aria-live="polite" data-testid="caption">
@@ -85,10 +93,13 @@ export function ScopeConsole({ size = 188 }: { size?: number }) {
             <Square size={13} aria-hidden /> Stop
           </button>
         )}
-        {speaking && (
+        {(speaking || (remote && tabletSpeaking)) && (
           <button
             type="button"
-            onClick={() => send({ type: "stop_speaking" })}
+            onClick={() => {
+              if (remote) getTabletSpeech().stop(); // silence now, even if say_stop is late
+              send({ type: "stop_speaking" });
+            }}
             className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink hover:border-amber hover:text-amber"
           >
             <VolumeX size={14} aria-hidden /> Quiet

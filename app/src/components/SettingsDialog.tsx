@@ -4,6 +4,8 @@ import { pickFolder } from "../lib/platform";
 import type { Config } from "../lib/protocol";
 import { useApp } from "../store/app";
 import { DevinKeyField } from "./DevinKeyField";
+import { RemoteSettings } from "./RemoteSettings";
+import { TabletAccessSection } from "./TabletAccessSection";
 import { Modal } from "./Modal";
 
 const VOICES: { id: string; label: string }[] = [
@@ -71,6 +73,11 @@ function Toggle({ id, checked, onChange, label }: { id: string; checked: boolean
 const inputCls = "w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none";
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
+  const role = useApp((s) => s.role);
+  return role === "remote" ? <RemoteSettings onClose={onClose} /> : <DesktopSettings onClose={onClose} />;
+}
+
+function DesktopSettings({ onClose }: { onClose: () => void }) {
   const config = useApp((s) => s.config);
   const devices = useApp((s) => s.devices);
   const autoMic = devices.find((d) => d.auto);
@@ -243,6 +250,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <option value="dark">Night</option>
             <option value="light">Day</option>
           </select>
+        </Field>
+      </section>
+
+      <section className="mt-3 border-t border-line pt-3">
+        <h3 className="font-strip text-sm font-semibold text-muted">Tablet access</h3>
+        <Field label="Use from a tablet" hint="A paired tablet on your home Wi-Fi can talk to Barnaby. Off unless you turn it on.">
+          <TabletAccessSection enabled={Boolean(config.tablet_access)} onToggle={(v) => set({ tablet_access: v })} />
         </Field>
       </section>
     </Modal>

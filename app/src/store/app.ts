@@ -8,6 +8,8 @@ import type {
   EngineEvent,
   EngineInfo,
   SecretName,
+  ClientRole,
+  TabletStatus,
   EngineState,
   Risk,
   SessionSummary,
@@ -76,6 +78,12 @@ export interface AppState {
   config: Config | null;
   engines: EngineInfo[];
   secrets: Record<SecretName, boolean>;
+  role: ClientRole;
+  tablet: TabletStatus | null;
+  tabletPairing: { url: string; expiresAt: number } | null;
+  pairError: string | null;
+  tabletRecording: boolean;
+  tabletSpeaking: boolean;
   sessions: SessionSummary[];
   sessionId: string | null;
   turns: Turn[];
@@ -112,6 +120,12 @@ export const initialState: AppState = {
   config: null,
   engines: [{ name: "claude", available: true }],
   secrets: { devin: false },
+  role: "desktop",
+  tablet: null,
+  tabletPairing: null,
+  pairError: null,
+  tabletRecording: false,
+  tabletSpeaking: false,
   sessions: [],
   sessionId: null,
   turns: [],
@@ -168,6 +182,9 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         templates: e.templates ?? s.templates,
         continuousMode: e.handsfree ?? s.continuousMode,
         secrets: e.secrets ?? s.secrets,
+        role: e.role ?? s.role,
+        tablet: e.tablet ?? s.tablet,
+        pairError: null,
         sessions: e.sessions,
         speaking: e.speaking,
         components: e.components ?? s.components,
@@ -269,6 +286,20 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, devices: e.items };
     case "secrets":
       return { ...s, secrets: e.items };
+    case "tablet_status": {
+      const { type: _t, ...status } = e;
+      // A new device means the one-time link was just used: stop showing it.
+      const paired = status.devices.length > (s.tablet?.devices.length ?? 0);
+      return { ...s, tablet: status, tabletPairing: status.running && !paired ? s.tabletPairing : null };
+    }
+    case "tablet_pairing":
+      return { ...s, tabletPairing: { url: e.url, expiresAt: e.expires_at } };
+    case "pair_error":
+      return { ...s, pairError: e.message };
+    case "paired":
+    case "say":
+    case "say_stop":
+      return s; // handled outside the store (token storage, tablet speech)
     case "engines":
       return { ...s, engines: e.items };
     case "notice":

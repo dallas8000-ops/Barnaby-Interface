@@ -27,24 +27,33 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
   const stt = useApp((s) => s.components.stt);
   const tts = useApp((s) => s.components.tts);
 
+  const remote = useApp((s) => s.role === "remote");
   const inWorkspace = sessions.filter((s) => !workspace || s.workspace === workspace);
 
   return (
     <nav className="flex h-full flex-col border-r border-line bg-bg" aria-label="Sessions">
       <div className="px-4 pt-4 pb-3">
         <p className="font-strip text-[22px] font-semibold leading-none tracking-tight">Barnaby</p>
-        <button
-          type="button"
-          onClick={async () => {
-            const folder = await pickFolder();
-            if (folder) send({ type: "set_config", values: { workspace: folder } });
-          }}
-          className="mt-3 flex w-full items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-left text-sm hover:border-cyan"
-          title={workspace || "Choose project folder"}
-        >
-          <FolderOpen size={15} aria-hidden className="shrink-0 text-muted" />
-          <span className="truncate">{workspace ? folderName(workspace) : "Choose project"}</span>
-        </button>
+        {remote ? (
+          // A tablet can't change the project folder (the engine refuses it too).
+          <p className="mt-3 flex items-center gap-2 px-0.5 text-sm text-muted" title={workspace}>
+            <FolderOpen size={15} aria-hidden className="shrink-0" />
+            <span className="truncate">{workspace ? folderName(workspace) : "No project"}</span>
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={async () => {
+              const folder = await pickFolder();
+              if (folder) send({ type: "set_config", values: { workspace: folder } });
+            }}
+            className="mt-3 flex w-full items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-left text-sm hover:border-cyan"
+            title={workspace || "Choose project folder"}
+          >
+            <FolderOpen size={15} aria-hidden className="shrink-0 text-muted" />
+            <span className="truncate">{workspace ? folderName(workspace) : "Choose project"}</span>
+          </button>
+        )}
       </div>
 
       <div className="flex items-center justify-between px-4 pb-1">
@@ -83,9 +92,13 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
 
       <div className="border-t border-line px-3 py-2">
         <div className="flex gap-1">
-          <button type="button" onClick={onProfile} className="inline-flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-panel hover:text-ink">
-            <AudioLines size={15} aria-hidden /> Voice profile
-          </button>
+          {remote ? (
+            <span className="flex-1" />
+          ) : (
+            <button type="button" onClick={onProfile} className="inline-flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-panel hover:text-ink">
+              <AudioLines size={15} aria-hidden /> Voice profile
+            </button>
+          )}
           <button type="button" onClick={onSettings} aria-label="Settings" className="rounded-md px-2 py-1.5 text-muted hover:bg-panel hover:text-ink">
             <Settings size={16} aria-hidden />
           </button>

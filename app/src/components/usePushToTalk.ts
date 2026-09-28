@@ -1,6 +1,43 @@
 import { useEffect, useRef } from "react";
 import { send } from "../lib/client";
 import { onGlobalPtt } from "../lib/platform";
+import { isRemoteMode } from "../lib/remote";
+import { MicError, TabletMic } from "../lib/tabletMic";
+import { getTabletSpeech } from "../lib/tabletSpeech";
+import { useApp } from "../store/app";
+
+let tabletMic: TabletMic | null = null;
+let lastLevel = 0;
+// The worklet delivers ~375 frames/s at 48 kHz; the scope only needs animation-rate updates.
+const mic = () =>
+  (tabletMic ??= new TabletMic((rms) => {
+    const now = performance.now();
+    if (rms === 0 || now - lastLevel >= 33) {
+      lastLevel = now;
+      useApp.setState({ level: rms });
+    }
+  }));
+
+/** Tablet: record locally, send one clip on release. The PC transcribes it. */
+async function tabletPress(onLimit: () => void) {
+  // Barge-in: stop the tablet's voice (so the mic doesn't hear it) and drop queued replies.
+  getTabletSpeech().stop();
+  if (useApp.getState().tabletSpeaking || useApp.getState().speaking) send({ type: "stop_speaking" });
+  useApp.setState({ tabletRecording: true });
+  try {
+    await mic().start(onLimit);
+  } catch (err) {
+    useApp.setState({ tabletRecording: false });
+    const message = err instanceof MicError ? err.message : "Couldn't start the microphone.";
+    useApp.getState().apply({ type: "error", code: "mic", message });
+  }
+}
+
+async function tabletRelease() {
+  useApp.setState({ tabletRecording: false });
+  const clip = await mic().stop();
+  if (clip) send({ type: "audio_clip", pcm_b64: clip });
+}
 
 const isTypingTarget = (el: EventTarget | null): boolean => {
   if (!(el instanceof HTMLElement)) return false;
@@ -19,15 +56,18 @@ const isTypingTarget = (el: EventTarget | null): boolean => {
 export function usePushToTalk() {
   const held = useRef(false);
 
+  const remote = isRemoteMode();
   const press = () => {
     if (held.current) return;
     held.current = true;
-    send({ type: "ptt_start" });
+    if (remote) void tabletPress(release);
+    else send({ type: "ptt_start" });
   };
   const release = () => {
     if (!held.current) return;
     held.current = false;
-    send({ type: "ptt_stop" });
+    if (remote) void tabletRelease();
+    else send({ type: "ptt_stop" });
   };
 
   useEffect(() => {

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { client } from "./lib/client";
 import { onShellEvents } from "./lib/platform";
+import { forgetDevice, isRemoteMode } from "./lib/remote";
+import { getTabletSpeech } from "./lib/tabletSpeech";
 import { useApp } from "./store/app";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ChainProgress } from "./components/ChainProgress";
@@ -11,12 +13,20 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { VoiceProfileDialog } from "./components/VoiceProfileDialog";
+import { PairScreen } from "./components/PairScreen";
 
 export function App() {
   const [dialog, setDialog] = useState<"settings" | "profile" | null>(null);
+  const remote = isRemoteMode();
+  const connection = useApp((s) => s.connection);
 
   useEffect(() => {
-    const offEvent = client.onEvent((e) => useApp.getState().apply(e));
+    const speech = remote ? getTabletSpeech((speaking) => useApp.setState({ tabletSpeaking: speaking })) : null;
+    const offEvent = client.onEvent((e) => {
+      if (speech && e.type === "say") speech.say(e.text);
+      else if (speech && e.type === "say_stop") speech.stop();
+      useApp.getState().apply(e);
+    });
     const offStatus = client.onStatus((c) => useApp.getState().setConnection(c));
     client.start();
     let offShell: (() => void) | undefined;
@@ -39,6 +49,21 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    // The PC removed this tablet, or its token is no longer valid: forget it so the
+    // pairing screen shows instead of retrying a dead token.
+    if (remote && connection === "unauthorized") forgetDevice();
+  }, [remote, connection]);
+
+  if (remote && (connection === "unpaired" || connection === "unauthorized")) {
+    return (
+      <>
+        <PairScreen onRetry={() => window.location.reload()} />
+        <Toasts />
+      </>
+    );
+  }
+
   return (
     <div className="grid h-full grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_340px]">
       <div className="hidden md:block">
@@ -48,7 +73,7 @@ export function App() {
         <Conversation />
         <div className="flex flex-col items-center gap-4 border-t border-line bg-bg px-4 pt-5 pb-4">
           <ChainProgress />
-          <ScopeConsole />
+          <ScopeConsole size={remote ? 240 : undefined} />
           <Composer />
         </div>
       </main>

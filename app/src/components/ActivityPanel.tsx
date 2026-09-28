@@ -26,6 +26,7 @@ function edgeClass(ok: boolean | null) {
 }
 
 function Strip({ tool }: { tool: ToolItem }) {
+  const remote = useApp((s) => s.role === "remote"); // editors open on the PC, not the tablet
   const [open, setOpen] = useState(false);
   const isCommand = tool.name === "Bash";
   const detail = isCommand ? tool.summary : tool.path ?? tool.summary.replace(/^\S+\s*/, "");
@@ -53,7 +54,7 @@ function Strip({ tool }: { tool: ToolItem }) {
         <p className={`truncate text-[13px] text-ink ${isCommand || tool.path ? "font-mono" : ""}`} title={detail}>
           {detail}
         </p>
-        {tool.path && (
+        {tool.path && !remote && (
           <div className="mt-1 flex gap-1.5">
             {(["vscode", "cursor"] as const).map((editor) => (
               <button

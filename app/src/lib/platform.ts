@@ -1,4 +1,5 @@
 import type { EngineEndpoint } from "./engine";
+import { isRemoteMode, remoteEndpoint } from "./remote";
 
 export const isTauri = (): boolean =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -15,6 +16,7 @@ export async function resolveEndpoint(): Promise<EngineEndpoint> {
     if (!info) throw new Error("engine not ready");
     return { url: `ws://127.0.0.1:${info.port}`, token: info.token };
   }
+  if (isRemoteMode()) return remoteEndpoint();
   const params = new URLSearchParams(window.location.search);
   const url = params.get("engine") ?? import.meta.env.VITE_ENGINE_URL;
   const token = params.get("token") ?? import.meta.env.VITE_ENGINE_TOKEN;

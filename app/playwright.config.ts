@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,9 @@ const PY = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "pyt
 const DATA_DIR = process.env.BARNABY_E2E_DATA ?? mkdtempSync(join(tmpdir(), "barnaby-e2e-"));
 
 export const ENGINE_QUERY = `?engine=ws://127.0.0.1:${ENGINE_PORT}&token=${TOKEN}`;
+// Tablet access on, on a fixed port, so the tablet flow can pair against the real TLS server.
+export const TABLET_PORT = 18766;
+writeFileSync(join(DATA_DIR, "config.json"), JSON.stringify({ tablet_access: true, tablet_port: TABLET_PORT }));
 
 export default defineConfig({
   testDir: "./e2e",
@@ -27,7 +30,11 @@ export default defineConfig({
     trace: "retain-on-failure",
     ...devices["Desktop Chrome"],
     viewport: { width: 1440, height: 900 },
-    launchOptions: process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {},
+    launchOptions: {
+      ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}),
+      // The tablet flow records with a synthetic microphone (a steady beep), permission pre-granted.
+      args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    },
   },
   webServer: [
     {

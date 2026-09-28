@@ -82,6 +82,56 @@ Devin works differently from the other two. It runs in Devin's cloud on its own 
 - **No approvals.** Devin's actions happen on Devin's machine under Devin's own controls, so Barnaby's per-command approval cards don't apply to Devin turns.
 - **Cost.** Devin bills in ACUs against your Devin plan and the API reports no per-turn cost, so Devin turns show none.
 
+## Tablet access (Galaxy Tab and other Android tablets)
+
+Use Barnaby from a tablet on your home Wi-Fi. Your PC keeps doing all the work (agents,
+speech recognition); the tablet opens Barnaby in Chrome, records your voice, and shows and
+speaks the replies.
+
+**Set up once:**
+1. On the PC: **Settings → Tablet access**, switch it on.
+2. As administrator, allow the tablet port on *Private* networks only:
+   `powershell -ExecutionPolicy Bypass -File .\scripts\tablet-firewall.ps1`
+3. On the tablet, open `https://<your-pc-ip>:8766/barnaby-ca.crt` (Settings shows the exact
+   address). Chrome warns once; tap Advanced, then Proceed. Then install the file under
+   Android Settings → Security and privacy → More security settings → Install from device
+   storage → CA certificate. This is Barnaby's own certificate authority. It's limited to
+   home-network addresses and your PC's name, so it can't be used to impersonate real websites.
+4. On the PC, tap **Pair a tablet** and scan the QR code with the tablet. The link works once,
+   for 5 minutes.
+
+**Using it:** hold the circle on the tablet to talk and release to send. The PC transcribes it
+exactly like push-to-talk, including review drafts and learned corrections. Replies appear on
+the tablet and are read by the tablet's own voice. While a tablet is connected the PC stays
+quiet. You can approve and decline from the tablet under the same rules as the PC. The PC
+window and a tablet can be connected at the same time.
+
+**What stays on the PC:** the project folder, API keys, the microphone, hands-free, tablet
+access and pairing. The tablet can't change them, and the engine enforces this, not just the
+UI. A tablet can open past sessions of the current project only.
+
+**Removing a tablet:** Settings → Tablet access → **Remove**. Its connection closes at once and
+its key stops working.
+
+**How it's protected:**
+- Off by default. The tablet port only listens while tablet access is on.
+- Everything is encrypted with TLS.
+- Only paired devices get in. Each has a random 256-bit token; the PC stores only its SHA-256
+  hash. Pairing codes are single-use, expire in 5 minutes, and travel in the URL fragment, so
+  they're never sent in a request line.
+- Five failed attempts from one address lock it out for 10 minutes. Unauthenticated
+  connections are capped, and limited to 4 KB until they authenticate.
+- Only private (home-network) addresses may connect. Barnaby refuses to start tablet access
+  while Windows marks your network as Public, and the firewall rule only opens the port on
+  Private networks.
+- The socket accepts only the page's own `https://` origin. The page is served with a strict
+  Content Security Policy.
+- The tablet speaks only the sentences the PC would have spoken, already shortened and with
+  secrets redacted, never raw agent output.
+
+Design and threat model:
+`docs/superpowers/specs/2026-09-28-barnaby-tablet-access-design.md`.
+
 ## Hands-free mode
 
 Turn on **Hands-free** (next to the agent switch) and the microphone stays open. You just talk, and a pause ends your turn. The default pause is 1.2 seconds; change it in **Settings → Hands-free pause** if you get cut off mid-thought.
@@ -122,6 +172,7 @@ A malformed file is skipped with a log line and doesn't hide the others.
 - **The UI can't widen permissions.** `set_config` only accepts whitelisted keys, so the auto-approve list and the Claude binary path are editable only in `%APPDATA%\Barnaby\config.json`.
 - **IDE bridge (not started by default).** Any request with a browser `Origin` is refused, and the first frame must carry a secret token, compared in constant time. The port and token are published in an owner-only `ide-bridge.json` in the data directory, for extensions to read. Only authenticated clients receive events.
 - **Editor launch.** File paths must resolve inside the project, and paths with `cmd.exe` metacharacters are refused, because `code.cmd` / `cursor.cmd` re-parse argv too.
+- **Tablet access (off by default).** A second, TLS-only listener for paired tablets with its own role policy; see [Tablet access](#tablet-access-galaxy-tab-and-other-android-tablets).
 - **Cloud agent keys.** Stored only in Windows Credential Manager. The engine reads the key for each Devin request and sends it only in the `Authorization` header, over HTTPS, to Devin's fixed API host. The `set_secret` command carries the key as a pydantic `SecretStr`, so it never shows up in a log or validation message, and no event ever contains it.
 - **Speech hygiene.** API keys, tokens, JWTs, private keys and `password=` values are redacted before anything is spoken aloud.
 - **Webview.** Strict CSP (`script-src 'self'`, connections only to `ws://127.0.0.1`). Model output can't navigate the window, links open in your browser (http/https only), remote images are dropped, and Tauri capabilities are limited to events, the folder picker and opening URLs.
@@ -141,9 +192,9 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 259 tests
-cd app;    npm run typecheck; npm test                                   # 45 tests
-.\scripts\e2e.ps1                     # 9 E2E flows against the real engine in --mock mode
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 345 tests
+cd app;    npm run typecheck; npm test                                   # 83 tests
+.\scripts\e2e.ps1                     # 10 E2E flows against the real engine in --mock mode
 ```
 
 The engine suite drives the real subprocess path with a fake `claude` executable. It checks that the prompt arrives on stdin and not in argv, that the settings file is scoped and deleted, that tree-kill works on cancel, that 200 KB stream lines are handled, and that a missing result surfaces stderr. The stream parser is pinned to a fixture captured from real `claude -p --output-format stream-json` output. CI runs all of it on Windows and Ubuntu (`.github/workflows/ci.yml`).

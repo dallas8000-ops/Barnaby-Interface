@@ -29,6 +29,7 @@ function StatusNote({ turn, pending }: { turn: Turn; pending: boolean }) {
 }
 
 export function Conversation() {
+  const remote = useApp((s) => s.role === "remote");
   const turns = useApp((s) => s.turns);
   const hasPending = useApp((s) => s.approvals.length > 0);
   const workspace = useApp((s) => s.config?.workspace ?? "");
@@ -65,7 +66,8 @@ export function Conversation() {
     return (
       <div className="flex flex-1 items-center justify-center px-6">
         <p className="max-w-md text-center text-muted">
-          Hold Space and say what you want done in <span className="text-ink">{folderName(workspace)}</span>. For
+          {remote ? "Hold the circle" : "Hold Space"} and say what you want done in{" "}
+          <span className="text-ink">{folderName(workspace)}</span>. For
           example: “run the tests and fix whatever fails”.
         </p>
       </div>
