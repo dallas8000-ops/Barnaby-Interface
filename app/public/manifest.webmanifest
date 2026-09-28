@@ -1,0 +1,15 @@
+{
+  "name": "Barnaby",
+  "short_name": "Barnaby",
+  "description": "Talk to your coding agents. Your PC does the work.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1726",
+  "theme_color": "#0e1726",
+  "icons": [
+    { "src": "/icons/barnaby-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/barnaby-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
