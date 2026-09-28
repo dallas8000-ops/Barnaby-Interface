@@ -393,3 +393,29 @@ class AddressOrderTest(unittest.TestCase):
                          ["192.168.68.20", "192.168.56.1", "10.0.0.5"])
         self.assertEqual(order_addresses(None, {"10.0.0.5", "192.168.1.9"}), ["192.168.1.9", "10.0.0.5"])
         self.assertEqual(order_addresses("192.0.2.2", {"192.168.1.9"}), ["192.168.1.9"])  # not RFC 1918
+
+
+class VpnAddressOrderTest(unittest.TestCase):
+    """Found live on the user's PC: Proton VPN's tunnel (10.2.0.2) is the default route, so
+    it was listed first and the QR code pointed the tablet at an unreachable address."""
+
+    def test_physical_adapters_win_over_the_default_route(self):
+        from barnaby_engine.remote import order_addresses
+        self.assertEqual(order_addresses("10.2.0.2", {"10.2.0.2", "192.168.100.4"}, physical={"192.168.100.4"}),
+                         ["192.168.100.4", "10.2.0.2"])
+
+    def test_route_still_breaks_ties_among_physical_adapters(self):
+        from barnaby_engine.remote import order_addresses
+        self.assertEqual(order_addresses("192.168.68.20", {"192.168.56.1", "192.168.68.20", "10.2.0.2"},
+                                         physical={"192.168.68.20", "192.168.56.1"}),
+                         ["192.168.68.20", "192.168.56.1", "10.2.0.2"])
+
+    def test_unknown_physical_set_keeps_the_old_order(self):
+        from barnaby_engine.remote import order_addresses
+        self.assertEqual(order_addresses("192.168.1.9", {"192.168.1.9", "10.0.0.5"}, physical=None),
+                         ["192.168.1.9", "10.0.0.5"])
+
+    def test_windows_query_parsing(self):
+        from barnaby_engine import remote
+        self.assertEqual(remote._parse_ip_lines("192.168.100.4\r\n\r\n10.0.0.3\r\nnot-an-ip\r\n"),
+                         {"192.168.100.4", "10.0.0.3"})

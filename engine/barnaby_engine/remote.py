@@ -73,17 +73,62 @@ def lan_addresses() -> list[str]:
             route = s.getsockname()[0]
     except OSError:
         pass
-    return order_addresses(route, found)
+    return order_addresses(route, found, physical=physical_adapter_ips())
 
 
-def order_addresses(route: str | None, found: set[str]) -> list[str]:
-    """LAN addresses, most likely reachable first: the default route's interface, then
-    192.168.x, then the rest. Virtual adapters (VirtualBox 192.168.56.1, Hyper-V, WSL)
-    must not win over the real LAN, since the QR code uses the first one."""
+def order_addresses(route: str | None, found: set[str], physical: set[str] | None = None) -> list[str]:
+    """LAN addresses, most likely reachable first, because the QR code uses the first one.
+
+    1. Addresses on physical adapters (Ethernet / Wi-Fi hardware), when known. A VPN tunnel
+       (Proton VPN's 10.2.0.2) is often the default route yet unreachable from the tablet;
+       VirtualBox (192.168.56.1), Hyper-V and WSL adapters aren't reachable either.
+    2. Within each group, the default route's address first, then 192.168.x, then the rest.
+    """
     lan = {ip for ip in found | ({route} if route else set()) if _lan_ip(ip)}
-    first = [route] if route in lan else []
-    rest = sorted(lan - set(first), key=lambda a: (not a.startswith("192.168."), a))
-    return first + rest
+
+    def rank(ip: str) -> tuple[int, int, bool, str]:
+        return (0 if physical is None or ip in physical else 1, 0 if ip == route else 1,
+                not ip.startswith("192.168."), ip)
+    return sorted(lan, key=rank)
+
+
+def _parse_ip_lines(text: str) -> set[str]:
+    out = set()
+    for line in text.splitlines():
+        line = line.strip()
+        try:
+            ipaddress.IPv4Address(line)
+        except ValueError:
+            continue
+        out.add(line)
+    return out
+
+
+_physical_cache: tuple[float, set[str] | None] = (0.0, None)
+
+
+def physical_adapter_ips() -> set[str] | None:
+    """Windows: IPv4 addresses on connected physical adapters (cached 60 s). None elsewhere
+    or if Windows can't say, in which case ordering falls back to the default route."""
+    global _physical_cache
+    if sys.platform != "win32":
+        return None
+    at, cached = _physical_cache
+    if time.monotonic() - at < 60:
+        return cached
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | "
+             "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+             "ForEach-Object { $_.IPAddress }"],
+            capture_output=True, text=True, timeout=8, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ips: set[str] | None = _parse_ip_lines(out.stdout) or None
+    except (OSError, subprocess.SubprocessError):
+        ips = None
+    _physical_cache = (time.monotonic(), ips)
+    return ips
 
 
 # RFC 1918 only. Python's is_private also covers documentation, benchmarking and
