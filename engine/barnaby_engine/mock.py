@@ -98,8 +98,9 @@ class ScriptedAgent:
         self._cancel = asyncio.Event()
 
     async def run(self, prompt: str, *, workspace: str, session_id: str | None,
-                  grant: Grant | None) -> AsyncIterator[AgentEvent]:
-        self.calls.append({"prompt": prompt, "session_id": session_id, "grant": grant, "workspace": workspace})
+                  grant: Grant | None, scope: Any = None) -> AsyncIterator[AgentEvent]:
+        self.calls.append({"prompt": prompt, "session_id": session_id, "grant": grant, "workspace": workspace,
+                           "scope": scope})
         self._cancel = asyncio.Event()
         script = self.scripts.pop(0) if self.scripts else (self.default or demo_script)
         events = script(prompt, grant) if callable(script) else script
@@ -171,3 +172,19 @@ def devin_demo_script(prompt: str, grant: Grant | None) -> list[AgentEvent]:
             TextDelta(first + "\n\n"), TextDelta(second + "\n\n"),
             ToolEnd("devin-session", True, url),
             TurnResult(f"{first}\n\n{second}", MOCK_DEVIN_SESSION, False, None, 1200)]
+
+
+def task_demo_script(prompt: str, grant: Grant | None) -> list[AgentEvent]:
+    """A background task for demos/E2E. An instruction mentioning "install" first asks to
+    run `npm install zod`; everything else finishes with a one-line summary."""
+    instruction = prompt.split("\n\n", 1)[-1].strip()
+    if "install" in instruction.lower() and not grant and "The user" not in prompt:
+        return [SessionStarted(MOCK_SESSION, "mock"),
+                ToolStart("k1", "Bash", {"command": "npm install zod"}),
+                ToolEnd("k1", False, "Permission required"),
+                TurnResult("I need to install zod first.", MOCK_SESSION, False, 0.01, 800, denials=(
+                    Denial("k1", "Bash", {"command": "npm install zod", "description": "Install zod"}),))]
+    text = "Finished the task and all tests pass. I kept my changes inside my folders."
+    return [SessionStarted(MOCK_SESSION, "mock"),
+            ToolStart("k2", "Read", {"file_path": "README.md"}), ToolEnd("k2", True, "…"),
+            TextDelta(text), TurnResult(text, MOCK_SESSION, False, 0.02, 1500)]

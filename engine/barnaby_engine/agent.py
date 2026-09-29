@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
-from .safety import Grant, valid_session_id
+from .safety import Grant, Scope, valid_session_id
 
 VOICE_SYSTEM_PROMPT = """\
 You are being driven by voice through an app called Barnaby.
@@ -101,7 +101,7 @@ class AgentError(RuntimeError):
 
 class Agent(Protocol):
     def run(self, prompt: str, *, workspace: str, session_id: str | None,
-            grant: Grant | None) -> AsyncIterator[AgentEvent]: ...
+            grant: Grant | None, scope: Scope | None = None) -> AsyncIterator[AgentEvent]: ...
 
     async def cancel(self) -> None: ...
 
@@ -206,24 +206,46 @@ def resolve_claude(override: str = "") -> str:
     return candidate
 
 
-def build_settings(safe_bash: list[str], grant: Grant | None) -> dict[str, Any]:
+def build_settings(safe_bash: list[str], grant: Grant | None, scope: Scope | None = None) -> dict[str, Any]:
+    """Per-turn permissions. With task lanes the turn runs in ``default`` mode and may
+    edit only its lanes (anything else comes back as a permission denial, i.e. an
+    approval card). With busy lanes the conversation keeps ``acceptEdits`` but must
+    ask before editing a folder a background task holds. Verified on Claude Code
+    2.1.282; see the task-board spec."""
     allow = [f"Bash({rule})" for rule in safe_bash]
     add_dirs: list[str] = []
     if grant:
         allow.extend(grant.allow)
         add_dirs.extend(grant.add_dirs)
-    perms: dict[str, Any] = {"allow": allow, "defaultMode": "acceptEdits"}
+    mode = "acceptEdits"
+    ask: list[str] = []
+    if scope and scope.allow_lanes:
+        mode = "default"
+        allow.extend(f"Edit(./{lane}/**)" for lane in scope.allow_lanes)
+    if scope and scope.ask_lanes:
+        opened = {x.casefold() for x in (grant.open_lanes if grant else ())}
+        # "" = a whole-project task is running: ask before any edit.
+        ask = [f"Edit(./{lane}/**)" if lane else "Edit(./**)"
+               for lane in scope.ask_lanes if lane.casefold() not in opened]
+    perms: dict[str, Any] = {"allow": allow, "defaultMode": mode}
+    if ask:
+        perms["ask"] = ask
     if add_dirs:
         perms["additionalDirectories"] = add_dirs
     return {"permissions": perms}
 
 
+_PERMISSION_MODES = frozenset({"acceptEdits", "default"})
+
+
 def build_argv(claude: str, *, settings_path: str, prompt_path: str,
-               session_id: str | None, model: str) -> list[str]:
+               session_id: str | None, model: str, permission_mode: str = "acceptEdits") -> list[str]:
+    if permission_mode not in _PERMISSION_MODES:
+        raise ValueError(f"unsupported permission mode {permission_mode!r}")
     argv = [
         claude, "-p",
         "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-        "--permission-mode", "acceptEdits",
+        "--permission-mode", permission_mode,
         "--settings", settings_path,
         "--append-system-prompt-file", prompt_path,
     ]
@@ -266,19 +288,19 @@ class CliAgent:
         self._cancelled = False
 
     def _prepare(self, prompt: str, *, workspace: str, session_id: str | None,
-                 grant: Grant | None) -> Launch:
+                 grant: Grant | None, scope: Scope | None = None) -> Launch:
         raise NotImplementedError
 
     def _parser(self) -> Any:
         raise NotImplementedError
 
     async def run(self, prompt: str, *, workspace: str, session_id: str | None,
-                  grant: Grant | None) -> AsyncIterator[AgentEvent]:
+                  grant: Grant | None, scope: Scope | None = None) -> AsyncIterator[AgentEvent]:
         if not workspace or not Path(workspace).is_dir():
             raise AgentError("Pick a project folder first (Settings → Project folder).")
         self._cancelled = False
         self.scratch_dir.mkdir(parents=True, exist_ok=True)
-        launch = self._prepare(prompt, workspace=workspace, session_id=session_id, grant=grant)
+        launch = self._prepare(prompt, workspace=workspace, session_id=session_id, grant=grant, scope=scope)
         stderr_tail: collections.deque[str] = collections.deque(maxlen=40)
         try:
             kwargs: dict[str, Any] = {}
@@ -395,12 +417,15 @@ class ClaudeCodeAgent(CliAgent):
         return StreamParser()
 
     def _prepare(self, prompt: str, *, workspace: str, session_id: str | None,
-                 grant: Grant | None) -> Launch:
+                 grant: Grant | None, scope: Scope | None = None) -> Launch:
         claude = resolve_claude(self.claude_bin)
+        settings = build_settings(self.safe_bash, grant, scope)
+        mode = settings["permissions"]["defaultMode"]
         # Validate before writing anything so a refused turn leaves no temp files.
-        build_argv(claude, settings_path="-", prompt_path="-", session_id=session_id, model=self.model)
-        settings_path = self._write_private(json.dumps(build_settings(self.safe_bash, grant)), ".json")
+        build_argv(claude, settings_path="-", prompt_path="-", session_id=session_id, model=self.model,
+                   permission_mode=mode)
+        settings_path = self._write_private(json.dumps(settings), ".json")
         prompt_path = self._write_private(VOICE_SYSTEM_PROMPT, ".md")
         argv = build_argv(claude, settings_path=settings_path, prompt_path=prompt_path,
-                          session_id=session_id, model=self.model)
+                          session_id=session_id, model=self.model, permission_mode=mode)
         return Launch(argv=argv, stdin=prompt.encode("utf-8"), cleanup=[settings_path, prompt_path])

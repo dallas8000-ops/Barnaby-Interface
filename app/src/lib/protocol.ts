@@ -41,6 +41,50 @@ export interface EngineInfo {
   reason?: string;
 }
 
+export type TaskStatus = "queued" | "running" | "needs_approval" | "done" | "failed" | "cancelled" | "interrupted";
+
+/** A background task (engine: tasks.TaskRecord.public()). */
+export interface TaskView {
+  id: string;
+  workspace: string;
+  engine: AgentEngine;
+  title: string;
+  instruction: string;
+  lanes: string[];
+  status: TaskStatus;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  summary: string;
+  result_text: string;
+  error: string;
+  cost_usd: number | null;
+  cli_session_id: string | null;
+  turns: number;
+  warning?: string;
+}
+
+export interface TaskApprovalEvent {
+  type: "task_approval_required";
+  task_id: string;
+  request_id: string;
+  tool_name: string;
+  summary: string;
+  risk: Risk;
+  voice_approvable: boolean;
+  grantable: boolean;
+  detail: string;
+}
+
+export interface TasksSnapshot {
+  items: TaskView[];
+  folders: string[];
+  saved_lanes: Record<string, string[]>;
+  max_parallel: number;
+  /** Undecided task approval cards, so a client that reconnects can still answer them. */
+  approvals?: TaskApprovalEvent[];
+}
+
 export interface TemplateSummary {
   id: string;
   name: string;
@@ -71,6 +115,9 @@ export interface Config {
   save_voice_samples: boolean;
   safe_bash: string[];
   turn_timeout_s: number;
+  max_parallel_tasks?: number;
+  task_timeout_s?: number;
+  task_lanes?: Record<string, Record<string, string[]>>;
 }
 
 export interface SessionSummary {
@@ -115,6 +162,7 @@ export type EngineEvent =
       speaking: boolean;
       sessions: SessionSummary[];
       components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
+      tasks?: { type: "tasks" } & TasksSnapshot;
       protocol: number;
     }
   | { type: "state"; state: EngineState; detail: string | null }
@@ -147,6 +195,14 @@ export type EngineEvent =
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; t: number }
+  // Background tasks
+  | ({ type: "tasks" } & TasksSnapshot)
+  | { type: "task_update"; task: TaskView }
+  | { type: "task_text"; task_id: string; delta: string }
+  | { type: "task_activity"; task_id: string; tool: string; path: string | null }
+  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string }
+  | TaskApprovalEvent
+  | { type: "task_approval_decided"; task_id: string; request_id: string; approved: boolean }
   // Voice feature events
   | { type: "wake_word_detected"; timestamp: number }
   | { type: "continuous_mode_changed"; active: boolean }
@@ -191,4 +247,9 @@ export type Command =
   | { type: "audio_clip"; pcm_b64: string }
   | { type: "tablet_pair_start" }
   | { type: "tablet_revoke"; device_id: string }
+  | { type: "task_create"; engine: AgentEngine; instruction: string; lanes: string[]; title?: string | null }
+  | { type: "task_cancel"; task_id: string }
+  | { type: "task_follow_up"; task_id: string; text: string }
+  | { type: "task_clear" }
+  | { type: "task_list" }
   | { type: "ping" };

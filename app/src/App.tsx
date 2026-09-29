@@ -14,9 +14,10 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { VoiceProfileDialog } from "./components/VoiceProfileDialog";
 import { PairScreen } from "./components/PairScreen";
+import { TasksDialog } from "./components/TasksDialog";
 
 export function App() {
-  const [dialog, setDialog] = useState<"settings" | "profile" | null>(null);
+  const [dialog, setDialog] = useState<"settings" | "profile" | "tasks" | null>(null);
   const remote = isRemoteMode();
   const connection = useApp((s) => s.connection);
 
@@ -67,7 +68,7 @@ export function App() {
   return (
     <div className="app-shell grid h-full grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_340px]">
       <div className="hidden md:block">
-        <Sidebar onSettings={() => setDialog("settings")} onProfile={() => setDialog("profile")} />
+        <Sidebar onSettings={() => setDialog("settings")} onProfile={() => setDialog("profile")} onTasks={() => setDialog("tasks")} />
       </div>
       <main className="app-main flex min-h-0 min-w-0 flex-col">
         <Conversation />
@@ -82,6 +83,7 @@ export function App() {
       </div>
       {dialog === "settings" && <SettingsDialog onClose={() => setDialog(null)} />}
       {dialog === "profile" && <VoiceProfileDialog onClose={() => setDialog(null)} />}
+      {dialog === "tasks" && <TasksDialog onClose={() => setDialog(null)} />}
       <Toasts />
     </div>
   );

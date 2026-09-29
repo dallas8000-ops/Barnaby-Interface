@@ -1,4 +1,4 @@
-import { AudioLines, FolderOpen, Plus, Settings } from "lucide-react";
+import { AudioLines, FolderOpen, ListChecks, Plus, Settings } from "lucide-react";
 import { send } from "../lib/client";
 import { pickFolder } from "../lib/platform";
 import { useApp } from "../store/app";
@@ -19,7 +19,7 @@ function Dot({ status }: { status: string }) {
   return <span className={`inline-block h-2 w-2 rounded-full ${cls}`} aria-hidden />;
 }
 
-export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onProfile: () => void }) {
+export function Sidebar({ onSettings, onProfile, onTasks }: { onSettings: () => void; onProfile: () => void; onTasks?: () => void }) {
   const sessions = useApp((s) => s.sessions);
   const sessionId = useApp((s) => s.sessionId);
   const workspace = useApp((s) => s.config?.workspace ?? "");
@@ -28,6 +28,8 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
   const tts = useApp((s) => s.components.tts);
 
   const remote = useApp((s) => s.role === "remote");
+  const attention = useApp((s) => s.taskAttention);
+  const activeTasks = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "needs_approval").length);
   const inWorkspace = sessions.filter((s) => !workspace || s.workspace === workspace);
 
   return (
@@ -55,6 +57,26 @@ export function Sidebar({ onSettings, onProfile }: { onSettings: () => void; onP
           </button>
         )}
       </div>
+
+      {onTasks && (
+        // The task board lives in the side panel on wide screens; narrower ones open it from here.
+        <div className="px-4 pb-3 xl:hidden">
+          <button
+            type="button"
+            onClick={onTasks}
+            className="flex w-full items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-left text-sm hover:border-cyan"
+          >
+            <ListChecks size={15} aria-hidden className="shrink-0 text-muted" />
+            <span className="flex-1">Tasks</span>
+            {activeTasks > 0 && <span className="text-xs text-muted">{activeTasks} active</span>}
+            {attention > 0 && (
+              <span className="rounded-full bg-amber px-1.5 text-[11px] leading-4 text-bg" aria-label={`${attention} new`}>
+                {attention}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between px-4 pb-1">
         <h2 className="text-xs font-medium text-muted">Sessions</h2>

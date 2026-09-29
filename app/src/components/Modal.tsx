@@ -1,16 +1,23 @@
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+
+// Open modals, innermost last: only the top one handles Esc and Tab (the task board's
+// New task dialog opens on top of the Tasks dialog on narrow screens).
+const openModals: symbol[] = [];
 
 /** Accessible modal: focus moves in, Tab is trapped, Esc closes, focus returns. */
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const panel = useRef<HTMLDivElement>(null);
+  const titleId = useId(); // unique: a dialog can open on top of another
   // Callers pass a fresh onClose each render. Depending on it re-ran the effect
   // below on every keystroke, which yanked focus back to the first button.
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
   useEffect(() => {
+    const me = Symbol("modal");
+    openModals.push(me);
     const previous = document.activeElement as HTMLElement | null;
     const focusables = () =>
       Array.from(panel.current?.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])") ?? []).filter(
@@ -18,6 +25,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
       );
     focusables()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
+      if (openModals[openModals.length - 1] !== me) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         closeRef.current();
@@ -38,6 +46,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     document.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("keydown", onKey, true);
+      openModals.splice(openModals.indexOf(me), 1);
       previous?.focus?.();
     };
   }, []); // mount/unmount only: focus in, trap, restore focus on close
@@ -51,12 +60,12 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-title"
+        aria-labelledby={titleId}
         onMouseDown={(e) => e.stopPropagation()}
         className={`scroll-quiet max-h-[88vh] w-full ${wide ? "max-w-2xl" : "max-w-lg"} overflow-y-auto rounded-xl border border-line bg-panel shadow-2xl`}
       >
         <header className="sticky top-0 flex items-center justify-between border-b border-line bg-panel px-5 py-3">
-          <h2 id="modal-title" className="font-strip text-lg font-semibold">
+          <h2 id={titleId} className="font-strip text-lg font-semibold">
             {title}
           </h2>
           <button type="button" onClick={onClose} aria-label="Close" className="text-muted hover:text-ink">

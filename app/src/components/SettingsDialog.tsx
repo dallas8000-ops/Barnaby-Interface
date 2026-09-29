@@ -7,6 +7,7 @@ import { useApp } from "../store/app";
 import { DevinKeyField } from "./DevinKeyField";
 import { RemoteSettings } from "./RemoteSettings";
 import { TabletAccessSection } from "./TabletAccessSection";
+import { TasksSettings } from "./TasksSettings";
 import { Modal } from "./Modal";
 
 const VOICES: { id: string; label: string }[] = [
@@ -158,6 +159,13 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
         <Field label="Devin API key" htmlFor="devin-key">
           <DevinKeyField />
         </Field>
+      </section>
+
+      <section className="mt-3 border-t border-line pt-3">
+        <h3 className="font-strip text-sm font-semibold text-muted">Background tasks</h3>
+        <div className="py-2.5">
+          <TasksSettings config={config} />
+        </div>
       </section>
 
       <section className="mt-3 border-t border-line pt-3">

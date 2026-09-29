@@ -38,7 +38,8 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
                        ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
                        AudioClip, DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TabletPairStart,
-                       TabletRevoke, TextSubmit, UpdateCorrection,
+                       TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskFollowUp, TaskList,
+                       TextSubmit, UpdateCorrection,
                        ev, ev_error, ev_state,
                        ev_wake_word_detected, ev_continuous_mode_changed,
                        ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
@@ -48,7 +49,8 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
 from .command_chain import split_chain
 from .continuous import VoiceSegmenter
 from .cursor_agent import cursor_grantable
-from .safety import Grant, assess, grant_for
+from .safety import Grant, Scope, assess, grant_for, lane_of, redact_for_speech
+from .tasks import LaneError, TaskManager, parse_task_command, resolve_lane_words
 from .speech import SpeechComposer
 from .store import Store
 from .templates import TemplateManager, match_template, template_steps
@@ -212,7 +214,9 @@ class Orchestrator:
                  speaker_factory: Callable[[Config], Speaker] | None = None,
                  vault: Vault | None = None,
                  emit_desktop: Emit | None = None,
-                 tablet_factory: Callable[[int, Callable[[], None]], Any] | None = None) -> None:
+                 tablet_factory: Callable[[int, Callable[[], None]], Any] | None = None,
+                 task_agent_factory: Callable[[str, str], Agent] | None = None,
+                 task_forget: Callable[[str], None] | None = None) -> None:
         self.config = config
         self.store = store
         self.profile = profile
@@ -242,6 +246,11 @@ class Orchestrator:
         self._tablet: Any = None
         self._tablet_error: str | None = None
         self._remote_listeners = 0
+        # Background tasks (task board): each gets its own agent from task_agent_factory.
+        self.tasks = TaskManager(store=store, config=config, agent_factory=task_agent_factory,
+                                 engine_available=self._engine_available, emit=emit,
+                                 speak=lambda text: self._enqueue_speech([text], self._speech_gen),
+                                 on_forget=task_forget)
 
         self.state = State.IDLE
         self.session_id: str | None = None
@@ -274,6 +283,7 @@ class Orchestrator:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._speech_task = asyncio.create_task(self._speech_worker())
+        self.tasks.load()
         self._refresh_project_terms()
         asyncio.create_task(self._preload())
         await self._apply_handsfree()
@@ -282,6 +292,7 @@ class Orchestrator:
     async def shutdown(self) -> None:
         self._stop_handsfree()
         await self._stop_tablet()
+        await self.tasks.shutdown()
         await self._cancel_turn()
         self.speaker.stop()
         if self._speech_task:
@@ -291,7 +302,8 @@ class Orchestrator:
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
                   templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(), tablet=self._tablet_status(),
                   session_id=self.session_id, speaking=self._speaking,
-                  sessions=self.store.list_sessions(), components=self._components)
+                  sessions=self.store.list_sessions(), components=self._components,
+                  tasks=self.tasks.snapshot())
 
     def engines(self) -> list[dict[str, Any]]:
         out = []
@@ -340,9 +352,21 @@ class Orchestrator:
             case StopSpeaking():
                 self._stop_speaking()
             case Approve(request_id=rid):
-                await self._decide(rid, True)
+                if not await self.tasks.decide(rid, True):
+                    await self._decide(rid, True)
             case Deny(request_id=rid):
-                await self._decide(rid, False)
+                if not await self.tasks.decide(rid, False):
+                    await self._decide(rid, False)
+            case TaskCreate(engine=engine, instruction=instruction, lanes=lanes, title=title):
+                await self.tasks.create(engine, instruction, list(lanes), title)
+            case TaskCancel(task_id=tid):
+                await self.tasks.cancel(tid)
+            case TaskFollowUp(task_id=tid, text=text):
+                await self.tasks.follow_up(tid, text)
+            case TaskClear():
+                await self.tasks.clear_finished()
+            case TaskList():
+                await self.emit(self.tasks.snapshot())
             case NewSession():
                 await self._cancel_all()
                 self.session_id = self.claude_session_id = self.session_engine = None
@@ -513,6 +537,11 @@ class Orchestrator:
         text = text.strip()
         if not text:
             return
+        task = parse_task_command(text)
+        if task is not None:
+            self._drafts.pop(draft_id, None) if draft_id else None
+            await self._voice_task(*task)
+            return
         routed, rest = route_engine(text)
         if routed and routed in self.agents:
             if routed != self.config.engine:
@@ -550,6 +579,23 @@ class Orchestrator:
                 return
         prompt = f"(The user interrupted your previous step.) {text}" if interrupting else text
         await self._start_turn(prompt, display_text=text, grant=None)
+
+    async def _voice_task(self, engine: str, words: list[str], instruction: str) -> None:
+        """"task for Devin in backend: ..." -> a background task; the conversation carries on."""
+        saved = self.config.task_lanes.get(self.config.workspace, {})
+        try:
+            lanes = resolve_lane_words(self.config.workspace, words, saved) if words else []
+        except LaneError as exc:
+            await self.emit(ev_error("tasks", str(exc)))
+            self._enqueue_speech([str(exc)], self._speech_gen)
+            await self._set_state(self._resting_state())
+            return
+        t = await self.tasks.create(engine, instruction, lanes, None)
+        if t is not None:
+            who = ENGINE_LABELS.get(engine, engine)
+            verb = "Started" if t.status == "running" else "Queued"
+            self._enqueue_speech([redact_for_speech(f"{verb} {who} on {t.title}.")], self._speech_gen)
+        await self._set_state(self._resting_state())
 
     async def _supersede(self) -> bool:
         """A new instruction replaces whatever was in flight. Returns True if a turn was interrupted."""
@@ -680,9 +726,12 @@ class Orchestrator:
             # aclosing(): on CancelledError the generator's finally (which kills the
             # claude process tree) must run now, not whenever the GC gets to it.
             agent = self._running_agent = self.agent
+            # Folders a background task is working in: this turn must ask before editing them.
+            busy = self.tasks.busy_lanes(self.config.workspace)
+            extra = {"scope": Scope(ask_lanes=busy)} if busy else {}
             async with contextlib.aclosing(agent.run(
                     prompt, workspace=self.config.workspace,
-                    session_id=self.claude_session_id, grant=grant)) as stream:
+                    session_id=self.claude_session_id, grant=grant, **extra)) as stream:
                 async for event in stream:
                     match event:
                         case SessionStarted(session_id=csid):
@@ -776,17 +825,27 @@ class Orchestrator:
     # ------------------------------------------------------------ approvals
     async def _open_approvals(self, turn_id: str, result: TurnResult) -> None:
         group = ApprovalGroup()
+        busy = self.tasks.busy_lanes(self.config.workspace)
         for denial in result.denials:
             a = assess(denial.tool_name, denial.tool_input)
+            summary = a.summary
             grant = grant_for(denial.tool_name, denial.tool_input)
             if grant is not None and self.session_engine == "cursor" and not cursor_grantable(
                     denial.tool_name, denial.tool_input):
                 grant = None  # can't be expressed as one exact Cursor rule
+            path = denial.tool_input.get("file_path") or denial.tool_input.get("notebook_path")
+            lane = lane_of(self.config.workspace, path, busy) if busy and isinstance(path, str) and path else None
+            if lane is not None:
+                # The ask rule for this lane stops the edit; approving opens the lane for one turn.
+                rel = Path(path).resolve().relative_to(Path(self.config.workspace).resolve()).as_posix()
+                summary = f"{denial.tool_name} {rel} (a background task is working in {lane or 'this project'})"
+                if grant is not None:
+                    grant = Grant(allow=grant.allow, add_dirs=grant.add_dirs, open_lanes=(lane,))
             rid = uuid.uuid4().hex[:12]
-            group.items[rid] = PendingApproval(rid, denial.tool_name, denial.tool_input, a.summary,
+            group.items[rid] = PendingApproval(rid, denial.tool_name, denial.tool_input, summary,
                                                a.risk, a.voice_approvable, grant)
             await self.emit(ev("approval_required", turn_id=turn_id, request_id=rid,
-                               tool_name=denial.tool_name, summary=a.summary, risk=a.risk.value,
+                               tool_name=denial.tool_name, summary=summary, risk=a.risk.value,
                                voice_approvable=a.voice_approvable and grant is not None,
                                grantable=grant is not None,
                                detail=_approval_detail(denial.tool_name, denial.tool_input)))
@@ -829,6 +888,7 @@ class Orchestrator:
         grant = Grant(
             allow=tuple(r for p in approved if p.grant for r in p.grant.allow),
             add_dirs=tuple(d for p in approved if p.grant for d in p.grant.add_dirs),
+            open_lanes=tuple(x for p in approved if p.grant for x in p.grant.open_lanes),
         ) if approved else None
         parts = []
         if approved:
@@ -989,6 +1049,10 @@ class Orchestrator:
         if hasattr(self.recorder, "device"):
             self.recorder.device = self.config.input_device  # type: ignore[attr-defined]
         await self.emit(ev("config", config=after, rejected=rejected))
+        task_keys = ("workspace", "max_parallel_tasks", "task_lanes")
+        if any(before.get(k) != after.get(k) for k in task_keys):
+            await self.emit(self.tasks.snapshot())
+            await self.tasks.pump()  # a higher limit may let queued tasks start
         if (before.get("tablet_access"), before.get("tablet_port")) != (after.get("tablet_access"), after.get("tablet_port")):
             await self._apply_tablet()
 
@@ -1005,6 +1069,16 @@ class Orchestrator:
         """Extra checks for tablet commands that need engine state (the hub has already
         applied the role policy). Opening a session switches to its project folder,
         which only the PC may do, so a tablet can open sessions of the current project only."""
+        # Tasks of another project: the tablet can see and cancel them, but only the PC
+        # follows them up or approves their actions (same rule as opening its sessions).
+        if isinstance(cmd, TaskFollowUp):
+            t = self.tasks.tasks.get(cmd.task_id)
+            if t is not None and t.workspace != self.config.workspace:
+                return "That task belongs to another project. Follow it up on the PC."
+        if isinstance(cmd, (Approve, Deny)):
+            t = self.tasks.task_of_request(cmd.request_id)
+            if t is not None and t.workspace != self.config.workspace:
+                return "That task belongs to another project. Approve it on the PC."
         if isinstance(cmd, LoadSession):
             session = self.store.get_session(cmd.session_id)
             if session and session.get("workspace") and session["workspace"] != self.config.workspace:

@@ -15,9 +15,11 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import signal
 import sys
 import threading
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 from . import __version__
@@ -103,11 +105,15 @@ async def amain(args: argparse.Namespace) -> None:
     template_manager = TemplateManager()
 
     if args.mock:
-        from .mock import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent, devin_demo_script
+        from .mock import (FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent, devin_demo_script,
+                           task_demo_script)
         recorder, transcriber, speaker = FakeRecorder(), FakeTranscriber(), FakeSpeaker(delay=0.4)
         vault = Vault(MemoryCredentials())  # never touch the real Credential Manager in mock runs
         agents = {"claude": ScriptedAgent(step_delay=0.35), "cursor": ScriptedAgent(step_delay=0.35),
                   "devin": ScriptedAgent(step_delay=0.35, default=devin_demo_script)}
+
+        def task_factory(engine: str, task_id: str):
+            return ScriptedAgent(step_delay=0.6, default=task_demo_script)
 
         def available(name: str) -> str | None:
             return DEVIN_NEEDS_KEY if name == "devin" and not vault.has("devin") else None
@@ -138,6 +144,8 @@ async def amain(args: argparse.Namespace) -> None:
             "devin": DevinAgent(DevinClient(devin_key)),
         }
 
+        task_factory = make_task_factory(config, devin_key, data_dir())
+
         def available(name: str) -> str | None:
             try:
                 if name == "claude":
@@ -156,6 +164,8 @@ async def amain(args: argparse.Namespace) -> None:
                         emit=bridge.emit,
                         transcriber_factory=tfactory, speaker_factory=sfactory, vault=vault,
                         emit_desktop=bridge.emit_desktop,
+                        task_agent_factory=task_factory,
+                        task_forget=lambda tid: shutil.rmtree(data_dir() / "cursor-tasks" / tid, ignore_errors=True),
                         tablet_factory=lambda port, on_change: RemoteServer(
                             bridge, data_dir=data_dir() / "tablet", port=port, on_change=on_change,
                             # --mock (UI dev / E2E) runs a scripted agent; don't depend on the
@@ -184,6 +194,23 @@ async def amain(args: argparse.Namespace) -> None:
         server.close()
         await server.wait_closed()
         store.close()
+
+
+def make_task_factory(config: Config, devin_key, base: Path):
+    """A fresh agent per task turn: the shared agents hold one process each.
+    Cursor tasks get their own config dir so parallel runs don't share settings/history.
+    Settings are read at call time, so a changed model or timeout applies to the next turn."""
+    def factory(engine: str, task_id: str):
+        if engine == "cursor":
+            return CursorAgent(config_dir=base / "cursor-tasks" / task_id, cursor_bin=config.cursor_bin,
+                               model=config.cursor_model, safe_bash=config.safe_bash,
+                               timeout_s=config.task_timeout_s, scratch_dir=base / "run")
+        if engine == "devin":
+            return DevinAgent(DevinClient(devin_key), watch_timeout_s=float(config.task_timeout_s))
+        return ClaudeCodeAgent(claude_bin=config.claude_bin, model=config.claude_model,
+                               safe_bash=config.safe_bash, timeout_s=config.task_timeout_s,
+                               scratch_dir=base / "run")
+    return factory
 
 
 def main() -> None:

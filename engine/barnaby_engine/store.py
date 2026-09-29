@@ -49,6 +49,25 @@ CREATE TABLE IF NOT EXISTS vocab (
     count INTEGER NOT NULL DEFAULT 1,
     last_seen REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    engine TEXT NOT NULL,
+    title TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    lanes_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL,
+    summary TEXT NOT NULL DEFAULT '',
+    result_text TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    cost_usd REAL,
+    cli_session_id TEXT,
+    turns INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_tasks_created ON tasks(created_at DESC);
 CREATE TABLE IF NOT EXISTS voice_samples (
     id TEXT PRIMARY KEY,
     path TEXT NOT NULL,
@@ -172,3 +191,39 @@ class Store:
 
     def voice_sample_count(self) -> int:
         return int(self._rows("SELECT COUNT(*) AS n FROM voice_samples")[0]["n"])
+
+    # ------------------------------------------------------------ background tasks
+    MAX_RESULT_CHARS = 20_000
+
+    def save_task(self, t: Any) -> None:
+        """Insert or update a tasks.TaskRecord (the pending prompt is not persisted)."""
+        self._exec(
+            "INSERT INTO tasks (id, workspace, engine, title, instruction, lanes_json, status, created_at,"
+            " started_at, finished_at, summary, result_text, error, cost_usd, cli_session_id, turns)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(id) DO UPDATE SET title=excluded.title, instruction=excluded.instruction,"
+            " lanes_json=excluded.lanes_json, status=excluded.status, started_at=excluded.started_at,"
+            " finished_at=excluded.finished_at, summary=excluded.summary, result_text=excluded.result_text,"
+            " error=excluded.error, cost_usd=excluded.cost_usd, cli_session_id=excluded.cli_session_id,"
+            " turns=excluded.turns",
+            (t.id, t.workspace, t.engine, t.title, t.instruction, json.dumps(list(t.lanes)), t.status,
+             t.created_at, t.started_at, t.finished_at, t.summary, t.result_text[: self.MAX_RESULT_CHARS],
+             t.error, t.cost_usd, t.cli_session_id, t.turns))
+
+    def list_tasks(self, limit: int = 100) -> list[Any]:
+        from .tasks import TaskRecord
+        rows = self._rows("SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            lanes = tuple(json.loads(r.pop("lanes_json") or "[]"))
+            out.append(TaskRecord(lanes=lanes, **r))
+        return out
+
+    def interrupt_active_tasks(self) -> int:
+        cur = self._exec("UPDATE tasks SET status='interrupted', finished_at=COALESCE(finished_at, ?)"
+                         " WHERE status IN ('queued','running','needs_approval')", (time.time(),))
+        return cur.rowcount
+
+    def delete_tasks(self, ids: list[str]) -> None:
+        for tid in ids:
+            self._exec("DELETE FROM tasks WHERE id = ?", (tid,))

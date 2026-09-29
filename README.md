@@ -163,6 +163,26 @@ The limit is 5 steps per request (`command_chain_max_depth` in `config.json`). T
 
 A malformed file is skipped with a log line and doesn't hide the others.
 
+## Background tasks (several agents at once)
+
+Hand work to Claude, Cursor or Devin and keep talking to Barnaby about something else. Each task has one agent, one instruction, and the folders it may change (its *lane*). Open the **Tasks** tab in the side panel (or **Tasks** in the sidebar on narrower screens) and press **New task**, or say it:
+
+- "task for Devin in backend: add the orders endpoint"
+- "assign the frontend to Cursor: fix the login form"
+
+**Lanes keep agents out of each other's way.** Up to 3 tasks run at once by default (Settings → Background tasks, 1–6). Tasks whose folders overlap wait their turn; the others go ahead. No folders means the whole project, and that task waits until no other task is working on this PC. Name folder sets once under **Settings → Background tasks → Saved lanes** (for example *backend* = `engine`, *frontend* = `app`) so voice commands can use the names.
+
+**How each agent is fenced in:**
+
+- **Claude** runs task turns in Claude Code's `default` mode with `Edit(./<lane>/**)` rules. An edit outside its folders becomes an approval card on that task; approving allows exactly that one file. Edits outside the project can't be approved in a task.
+- **Cursor** can't pause for approval on file edits, so Barnaby stops the task when it starts editing outside its folders and says so. That edit may already be saved, so check it.
+- **Devin** works in its own cloud copy of the repo and opens a pull request, so it never competes for local folders. It still counts toward the limit.
+- **Your conversation** keeps working while tasks run. If it tries to edit a folder a task is using, you get an approval card first. A conversation turn that was already running when a task started keeps its permissions until its next turn.
+- **Commands** follow the normal rules: tests and read-only commands run, and anything else is a card. Lanes keep agents out of each other's way; they aren't a sandbox, because a test or build command you've allowed can still write anywhere in the project.
+- **Your own Claude settings can widen lanes.** Claude Code merges your user and project settings with Barnaby's. If they contain an `Edit` or `Write` allow rule, the task card warns you.
+
+**Updates.** When a task finishes, Barnaby says so ("Devin finished orders endpoint.") with the first sentence of its summary, shows a toast, and the card shows the summary, time and cost. A task that needs your OK says so once, and its card appears on the task, never mixed into the conversation's cards. Saying "yes" never approves a background task; click it (on the PC or the tablet; the tablet can act on tasks of the PC's current project, and cards sent while it slept are still there when it wakes). **Follow up** on a finished task continues the same agent session with the same folders; **Cancel** stops only that task (a Devin session keeps running in Devin's app). Tasks survive a restart as *interrupted*, and a follow-up picks them up again.
+
 ## Security model
 
 - **Prompt over stdin, never argv.** An npm-installed `claude.cmd` runs through `cmd.exe`, which re-parses arguments. A transcript containing `&` would otherwise be command injection. Every argv element is a fixed flag, a validated UUID or model name, or a path Barnaby generated.
@@ -192,9 +212,9 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 345 tests
-cd app;    npm run typecheck; npm test                                   # 83 tests
-.\scripts\e2e.ps1                     # 10 E2E flows against the real engine in --mock mode
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 443 tests
+cd app;    npm run typecheck; npm test                                   # 111 tests
+.\scripts\e2e.ps1                     # 12 E2E flows against the real engine in --mock mode
 ```
 
 The engine suite drives the real subprocess path with a fake `claude` executable. It checks that the prompt arrives on stdin and not in argv, that the settings file is scoped and deleted, that tree-kill works on cancel, that 200 KB stream lines are handled, and that a missing result surfaces stderr. The stream parser is pinned to a fixture captured from real `claude -p --output-format stream-json` output. CI runs all of it on Windows and Ubuntu (`.github/workflows/ci.yml`).

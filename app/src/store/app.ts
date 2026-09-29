@@ -14,6 +14,8 @@ import type {
   Risk,
   SessionSummary,
   StoredTurn,
+  TaskApprovalEvent,
+  TaskView,
   TemplateSummary,
 } from "../lib/protocol";
 
@@ -47,6 +49,10 @@ export interface Approval {
   voiceApprovable: boolean;
   grantable: boolean;
   decided: boolean | null;
+}
+
+export interface TaskApproval extends Approval {
+  taskId: string;
 }
 
 export interface ChainView {
@@ -90,6 +96,16 @@ export interface AppState {
   draft: { id: string; heard: string; text: string } | null;
   approvals: Approval[];
   toasts: Toast[];
+  // Background tasks (task board)
+  tasks: TaskView[];
+  taskText: Record<string, string>;
+  taskActivity: Record<string, { tool: string; path: string | null }>;
+  taskApprovals: TaskApproval[];
+  taskFolders: string[];
+  savedLanes: Record<string, string[]>;
+  maxParallel: number;
+  /** Finished tasks and approval requests since the board was last looked at. */
+  taskAttention: number;
   voiceProfile: VoiceProfileView | null;
   devices: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[];
   
@@ -132,6 +148,14 @@ export const initialState: AppState = {
   draft: null,
   approvals: [],
   toasts: [],
+  tasks: [],
+  taskText: {},
+  taskActivity: {},
+  taskApprovals: [],
+  taskFolders: [],
+  savedLanes: {},
+  maxParallel: 3,
+  taskAttention: 0,
   voiceProfile: null,
   devices: [],
   
@@ -167,15 +191,58 @@ const fromStored = (t: StoredTurn, engine?: AgentEngine): Turn => ({
   costUsd: t.cost_usd,
 });
 
+const ENGINE_NAME: Record<string, string> = { claude: "Claude", cursor: "Cursor", devin: "Devin" };
+const newestFirst = (items: TaskView[]) => [...items].sort((a, b) => b.created_at - a.created_at);
+const without = <T,>(rec: Record<string, T>, id: string): Record<string, T> => {
+  if (!(id in rec)) return rec;
+  const { [id]: _gone, ...rest } = rec;
+  return rest;
+};
+
+const toTaskApproval = (e: TaskApprovalEvent): TaskApproval => ({
+  taskId: e.task_id,
+  requestId: e.request_id,
+  toolName: e.tool_name,
+  summary: e.summary,
+  detail: e.detail,
+  risk: e.risk,
+  voiceApprovable: false, // background tasks are never approved by voice
+  grantable: e.grantable,
+  decided: null,
+});
+
+function applySnapshot(
+  s: AppState,
+  snap: { items: TaskView[]; folders: string[]; saved_lanes: Record<string, string[]>; max_parallel: number; approvals?: TaskApprovalEvent[] },
+): AppState {
+  const ids = new Set(snap.items.map((t) => t.id));
+  const keep = <T,>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).filter(([k]) => ids.has(k)));
+  return {
+    ...s,
+    tasks: newestFirst(snap.items),
+    taskFolders: snap.folders,
+    savedLanes: snap.saved_lanes,
+    maxParallel: snap.max_parallel,
+    taskText: keep(s.taskText),
+    taskActivity: keep(s.taskActivity),
+    // The engine's list of undecided cards is authoritative: it restores cards sent while this
+    // client was away and drops ones answered elsewhere.
+    taskApprovals: snap.approvals
+      ? snap.approvals.map(toTaskApproval)
+      : s.taskApprovals.filter((a) => snap.items.some((t) => t.id === a.taskId && t.status === "needs_approval")),
+  };
+}
+
 const updateTurn = (turns: Turn[], id: string, fn: (t: Turn) => Turn): Turn[] =>
   turns.map((t) => (t.id === id ? fn(t) : t));
 
 /** Pure reducer: every engine event maps to one state transition. Unit-tested directly. */
 export function reduceEvent(s: AppState, e: EngineEvent): AppState {
   switch (e.type) {
-    case "hello":
+    case "hello": {
+      const base = e.tasks ? applySnapshot(s, e.tasks) : s;
       return {
-        ...s,
+        ...base,
         engineState: e.state,
         config: e.config,
         engines: e.engines ?? s.engines,
@@ -188,6 +255,42 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         sessions: e.sessions,
         speaking: e.speaking,
         components: e.components ?? s.components,
+      };
+    }
+    case "tasks":
+      return applySnapshot(s, e);
+    case "task_update": {
+      const t = e.task;
+      const exists = s.tasks.some((x) => x.id === t.id);
+      const tasks = exists ? s.tasks.map((x) => (x.id === t.id ? t : x)) : newestFirst([...s.tasks, t]);
+      return {
+        ...s,
+        tasks,
+        // A fresh turn starts with fresh live text; the final reply is in result_text.
+        taskText: t.status === "queued" ? without(s.taskText, t.id) : s.taskText,
+        taskActivity: t.status === "running" ? s.taskActivity : without(s.taskActivity, t.id),
+        taskApprovals: t.status === "needs_approval" ? s.taskApprovals : s.taskApprovals.filter((a) => a.taskId !== t.id),
+      };
+    }
+    case "task_text":
+      return { ...s, taskText: { ...s.taskText, [e.task_id]: (s.taskText[e.task_id] ?? "") + e.delta } };
+    case "task_activity":
+      return { ...s, taskActivity: { ...s.taskActivity, [e.task_id]: { tool: e.tool, path: e.path } } };
+    case "task_done": {
+      const who = ENGINE_NAME[e.engine] ?? e.engine;
+      const toasts =
+        e.status === "done"
+          ? toast(s, "info", `${who} finished ${e.title}.${e.summary ? ` ${e.summary}` : ""}`)
+          : toast(s, "error", `${who}'s task ${e.title} failed${e.error ? `: ${e.error}` : "."}`);
+      return { ...s, toasts, taskAttention: s.taskAttention + 1 };
+    }
+    case "task_approval_required":
+      if (s.taskApprovals.some((a) => a.requestId === e.request_id)) return s;
+      return { ...s, taskAttention: s.taskAttention + 1, taskApprovals: [...s.taskApprovals, toTaskApproval(e)] };
+    case "task_approval_decided":
+      return {
+        ...s,
+        taskApprovals: s.taskApprovals.map((a) => (a.requestId === e.request_id ? { ...a, decided: e.approved } : a)),
       };
     case "state":
       return { ...s, engineState: e.state, level: e.state === "listening" ? s.level : 0 };
@@ -352,6 +455,7 @@ interface Actions {
   setConnection: (c: ConnectionStatus) => void;
   dismissToast: (id: number) => void;
   setDraftText: (text: string) => void;
+  seenTasks: () => void;
 }
 
 export const useApp = create<AppState & Actions>()((set) => ({
@@ -360,4 +464,5 @@ export const useApp = create<AppState & Actions>()((set) => ({
   setConnection: (connection) => set({ connection }),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setDraftText: (text) => set((s) => (s.draft ? { draft: { ...s.draft, text } } : {})),
+  seenTasks: () => set({ taskAttention: 0 }),
 }));

@@ -85,6 +85,66 @@ class Grant:
     """Extra permissions for exactly one resumed turn."""
     allow: tuple[str, ...] = ()
     add_dirs: tuple[str, ...] = ()
+    open_lanes: tuple[str, ...] = ()  # conversation: busy task lanes the user let this turn edit
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Folder lanes for one turn (see tasks.py).
+
+    * ``allow_lanes``: a background task may edit only these folders without asking.
+    * ``ask_lanes``: the conversation must ask before editing these (another task holds them).
+    Both are canonical project-relative paths from ``tasks.validate_lanes``.
+    """
+    allow_lanes: tuple[str, ...] = ()
+    ask_lanes: tuple[str, ...] = ()
+
+
+_BAD_RULE_PATH = re.compile(r"[*?\[\]{}()!~$`\"'\x00-\x1f\x7f]")
+_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def _project_relative(workspace: str, raw: str) -> str | None:
+    """``raw`` as a project-relative posix path, or None if it isn't inside the project."""
+    root = Path(workspace).resolve()
+    path = Path(raw)
+    if not path.is_absolute():
+        path = root / path
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    if resolved == root or root not in resolved.parents:
+        return None
+    return resolved.relative_to(root).as_posix()
+
+
+def lane_of(workspace: str, raw_path: str, lanes: tuple[str, ...]) -> str | None:
+    """The lane containing ``raw_path`` (absolute, or relative to the project), if any."""
+    rel = _project_relative(workspace, raw_path)
+    if rel is None:
+        return None
+    low = rel.casefold()
+    for lane in lanes:
+        key = lane.casefold()
+        if not key or low == key or low.startswith(key + "/"):  # "" = the whole project
+            return lane
+    return None
+
+
+def grant_for_task(tool_name: str, tool_input: dict[str, Any], workspace: str) -> Grant | None:
+    """Like :func:`grant_for`, but an edit is allowed as exactly one project file
+    (``Edit(./rel/path)``) because task turns run in ``default`` mode with lane rules.
+    Edits outside the project can't be approved in a task."""
+    if tool_name in _EDIT_TOOLS:
+        raw = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if not isinstance(raw, str) or not raw or not Path(raw).is_absolute() or ".." in Path(raw).parts:
+            return None
+        rel = _project_relative(workspace, raw)
+        if rel is None or _BAD_RULE_PATH.search(rel):
+            return None
+        return Grant(allow=(f"Edit(./{rel})",))
+    return grant_for(tool_name, tool_input)
 
 
 def grant_for(tool_name: str, tool_input: dict[str, Any]) -> Grant | None:

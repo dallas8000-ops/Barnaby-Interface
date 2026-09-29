@@ -60,6 +60,7 @@ REMOTE_COMMANDS = frozenset({
     "text_submit", "discard_draft", "cancel", "stop_speaking", "approve", "deny",
     "new_session", "load_session", "list_sessions", "set_config", "ping",
     "get_voice_profile", "list_templates", "run_template", "audio_clip",
+    "task_create", "task_cancel", "task_follow_up", "task_clear", "task_list",
 })
 REMOTE_CONFIG_KEYS = frozenset({"engine", "review_transcripts", "claude_model", "cursor_model"})
 REMOTE_ONLY = frozenset({"audio_clip"})  # the PC has its own microphone path

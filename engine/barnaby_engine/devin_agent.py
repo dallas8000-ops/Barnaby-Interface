@@ -184,7 +184,9 @@ class DevinAgent:
             pass
 
     async def run(self, prompt: str, *, workspace: str, session_id: str | None,
-                  grant: Any = None) -> AsyncIterator[AgentEvent]:
+                  grant: Any = None, scope: Any = None) -> AsyncIterator[AgentEvent]:
+        # scope (folder lanes) is advisory for Devin: it works on its own cloud copy of
+        # the repo, and the task preamble already names the folders.
         self._stop = asyncio.Event()
         started = self._clock()
         seen: set[str] = set()

@@ -41,7 +41,7 @@ from typing import Any
 
 from .agent import (VOICE_SYSTEM_PROMPT, AgentError, AgentEvent, CliAgent, Denial, Launch,
                     SessionStarted, TextDelta, ToolEnd, ToolStart, TurnResult, _preview)
-from .safety import Grant, valid_session_id
+from .safety import Grant, Scope, lane_of, valid_session_id
 
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_]{0,63}$")
 _VERSION_RE = re.compile(r"^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-\d{2}-\d{2}-\d{2})?-[a-f0-9]+$")
@@ -164,8 +164,12 @@ class CursorGuard:
     commands Cursor is about to reject still flow into approval cards.
     """
 
-    def __init__(self, workspace: str, safe_bash: list[str], grant: Grant | None) -> None:
+    def __init__(self, workspace: str, safe_bash: list[str], grant: Grant | None,
+                 scope: Scope | None = None) -> None:
         self.roots = [Path(workspace).resolve()]
+        self.allow_lanes = scope.allow_lanes if scope else ()
+        opened = {x.casefold() for x in (grant.open_lanes if grant else ())}
+        self.busy_lanes = tuple(x for x in (scope.ask_lanes if scope else ()) if x.casefold() not in opened)
         self.prefixes: list[str] = []
         self.exact: set[str] = set()
         for rule in safe_bash:
@@ -200,6 +204,22 @@ class CursorGuard:
             return seg in self.exact
         return seg in self.exact or any(seg == p or seg.startswith(p + " ") for p in self.prefixes)
 
+    def _lane_problem(self, raw: str) -> str | None:
+        # Cursor can't pause for approval on edits, so a lane breach stops the turn.
+        # The edit may already be on disk by the time the tool-call event arrives.
+        ws = str(self.workspace)
+        if self.allow_lanes and lane_of(ws, raw, self.allow_lanes) is None:
+            return (f"Stopped Cursor: this task tried to change {raw}, which is outside its folders "
+                    f"({', '.join(self.allow_lanes)}). That edit may already be saved; check it. "
+                    "Add the folder to the task, or use Claude, which can ask first.")
+        busy = lane_of(ws, raw, self.busy_lanes) if self.busy_lanes else None
+        if busy is not None:
+            where = f"in {busy}, which" if busy else "in the project, which"
+            return (f"Stopped Cursor: {raw} is {where} a background task is working on. "
+                    "That edit may already be saved; check it. Wait for the task, or use Claude, "
+                    "which can ask first.")
+        return None
+
     def check(self, name: str, tool_input: dict[str, Any]) -> str | None:
         if name in ("Edit", "Write", "Delete", "Read"):
             raw = str(tool_input.get("file_path") or "")
@@ -208,6 +228,8 @@ class CursorGuard:
                 return (f"Stopped Cursor: it tried to {verb} a file outside your project ({raw}). "
                         "Cursor can't be fenced in on Windows, so Barnaby blocks this. Use Claude for "
                         "work outside the project folder.")
+            if raw and name != "Read":
+                return self._lane_problem(raw)
             return None
         if name == "Bash":
             command = " ".join(str(tool_input.get("command", "")).split())
@@ -349,10 +371,10 @@ class CursorAgent(CliAgent):
         return CursorStreamParser()
 
     async def run(self, prompt: str, *, workspace: str, session_id: str | None,
-                  grant: Grant | None) -> AsyncIterator[AgentEvent]:
-        guard = CursorGuard(workspace, self.safe_bash, grant) if workspace and Path(workspace).is_dir() else None
+                  grant: Grant | None, scope: Scope | None = None) -> AsyncIterator[AgentEvent]:
+        guard = CursorGuard(workspace, self.safe_bash, grant, scope) if workspace and Path(workspace).is_dir() else None
         async with contextlib.aclosing(super().run(prompt, workspace=workspace, session_id=session_id,
-                                                   grant=grant)) as stream:
+                                                   grant=grant, scope=scope)) as stream:
             async for event in stream:
                 if guard and isinstance(event, ToolStart):
                     problem = guard.check(event.name, event.input)
@@ -371,7 +393,7 @@ class CursorAgent(CliAgent):
         os.replace(tmp, target)  # atomic: Cursor never reads a half-written file
 
     def _prepare(self, prompt: str, *, workspace: str, session_id: str | None,
-                 grant: Grant | None) -> Launch:
+                 grant: Grant | None, scope: Scope | None = None) -> Launch:
         base = resolve_cursor(self.cursor_bin)
         if session_id and not valid_session_id(session_id):
             raise AgentError("Refusing to resume: malformed session id.")

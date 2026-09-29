@@ -176,6 +176,38 @@ class Pair(_Cmd):
     name: str = Field(min_length=1, max_length=60, pattern=r"^[\w .()'-]+$")
 
 
+_TASK_ID = r"^[A-Za-z0-9]{1,32}$"
+
+
+class TaskCreate(_Cmd):
+    """Start a background task: one engine, one instruction, the folders it may change."""
+    type: Literal["task_create"]
+    engine: Literal["claude", "cursor", "devin"]
+    instruction: str = Field(min_length=1, max_length=20_000)
+    lanes: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=8)
+    title: str | None = Field(default=None, max_length=120)
+
+
+class TaskCancel(_Cmd):
+    type: Literal["task_cancel"]
+    task_id: str = Field(pattern=_TASK_ID)
+
+
+class TaskFollowUp(_Cmd):
+    type: Literal["task_follow_up"]
+    task_id: str = Field(pattern=_TASK_ID)
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class TaskClear(_Cmd):
+    """Remove finished tasks (done, failed, cancelled, interrupted) from the board."""
+    type: Literal["task_clear"]
+
+
+class TaskList(_Cmd):
+    type: Literal["task_list"]
+
+
 _pair_adapter: TypeAdapter[Pair] = TypeAdapter(Pair)
 
 
@@ -189,6 +221,7 @@ Command = Annotated[
         NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
         ListTemplates, RunTemplate, SetSecret, DeleteSecret, AudioClip, TabletPairStart, TabletRevoke,
+        TaskCreate, TaskCancel, TaskFollowUp, TaskClear, TaskList,
     ],
     Field(discriminator="type"),
 ]

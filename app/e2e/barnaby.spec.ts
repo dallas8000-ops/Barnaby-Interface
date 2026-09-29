@@ -127,10 +127,12 @@ test("chained steps pause for each approval and finish in order", async ({ page 
   await expect(chain.locator("li")).toHaveText([/Lint the code/, /Run the tests/]);
 
   for (const step of [1, 2]) {
-    await expect(page.getByTestId("approval")).toBeVisible({ timeout: 15_000 });
-    await expect(chain).toContainText(`Step ${step} of 2`);
-    await expect(chain).toContainText("waiting for your OK");
+    await expect(chain).toContainText(`Step ${step} of 2`, { timeout: 15_000 });
+    await expect(chain).toContainText("waiting for your OK", { timeout: 15_000 });
+    await expect(page.getByTestId("approval")).toBeVisible();
     await page.getByRole("button", { name: "Approve" }).click();
+    // Wait for the card to go, or the next pass could see this step's card before it clears.
+    await expect(page.getByTestId("approval")).toHaveCount(0);
   }
   await expect(chain).toHaveCount(0, { timeout: 15_000 });
   const convo = page.getByTestId("conversation");
@@ -261,4 +263,67 @@ test("tablet: pair by QR link, hold to talk, approve on the tablet, hear it ther
   await expect(t.getByTestId("pair-screen")).toBeVisible({ timeout: 10_000 });
   await expect(dialog.getByTestId("tablet-device")).toHaveCount(0);
   await tablet.close();
+});
+
+test("task board: two agents work in parallel, a same-folder task waits, approvals and updates per task", async ({ page }) => {
+  await fresh(page);
+  await page.getByRole("tab", { name: /Tasks/ }).click();
+  const board = page.getByRole("region", { name: "Tasks" });
+
+  async function assign(engine: RegExp, folder: string, instruction: string) {
+    await board.getByRole("button", { name: "New task" }).click();
+    const dialog = page.getByRole("dialog", { name: "New task" });
+    await dialog.getByRole("radio", { name: engine }).check();
+    await dialog.getByRole("button", { name: folder }).click();
+    await dialog.getByLabel("What to do").fill(instruction);
+    await dialog.getByRole("button", { name: "Start task" }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  await assign(/Claude/, "api/", "Add the orders endpoint");
+  await assign(/Cursor/, "app/", "Install zod and validate the login form");
+  await assign(/Claude/, "api/", "Document the orders endpoint");
+
+  const orders = page.getByRole("listitem", { name: "Task: Add the orders endpoint" });
+  const login = page.getByRole("listitem", { name: "Task: Install zod and validate the login form" });
+  const docs = page.getByRole("listitem", { name: "Task: Document the orders endpoint" });
+  await expect(orders).toHaveAttribute("data-status", "running");
+  await expect(login).toHaveAttribute("data-status", "running");
+  await expect(docs).toHaveAttribute("data-status", "queued"); // same folder as the first: waits its turn
+  await expect(docs.getByText("Waiting")).toBeVisible();
+
+  // The Cursor task asks to install a package: its card appears on its own task, not in the conversation.
+  await expect(login.getByTestId("approval")).toBeVisible({ timeout: 15_000 });
+  await expect(login.getByText("Needs your OK")).toBeVisible();
+  await expect(page.getByTestId("conversation").getByTestId("approval")).toHaveCount(0);
+
+  await expect(orders).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(orders.getByText("Finished the task and all tests pass.")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Claude finished Add the orders endpoint." }).first()).toBeVisible();
+  await expect(docs).not.toHaveAttribute("data-status", "queued", { timeout: 10_000 }); // lane freed: it started
+
+  await login.getByRole("button", { name: "Approve" }).click();
+  await expect(login).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(docs).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+
+  // Follow up on a finished task, then clear the board.
+  await orders.getByRole("textbox", { name: /Follow up/ }).fill("also add pagination");
+  await orders.getByRole("button", { name: "Send follow-up" }).click();
+  await expect(orders).toHaveAttribute("data-status", "running");
+  await expect(orders).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await board.getByRole("button", { name: "Clear finished" }).click();
+  await expect(board.getByTestId("task")).toHaveCount(0);
+});
+
+test("task board: a typed task command starts a background task and the conversation stays free", async ({ page }) => {
+  await fresh(page);
+  await page.getByLabel("Type an instruction").fill("task for cursor in engine: tidy the logging");
+  await page.keyboard.press("Enter");
+  await page.getByRole("tab", { name: /Tasks/ }).click();
+  const t = page.getByRole("listitem", { name: "Task: tidy the logging" });
+  await expect(t).toBeVisible();
+  await expect(t.getByText("engine/")).toBeVisible();
+  await expect(page.getByTestId("caption")).toHaveText("Hold Space to talk"); // not a conversation turn
+  await expect(t).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Clear finished" }).click();
 });

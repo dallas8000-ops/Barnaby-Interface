@@ -62,6 +62,11 @@ class Config:
     tablet_port: int = 8766              # fixed so the tablet's bookmark keeps working
     safe_bash: list[str] = field(default_factory=lambda: list(DEFAULT_SAFE_BASH))
     turn_timeout_s: int = 900
+    # Background tasks (task board): how many run at once, how long one may run, and
+    # named folder lanes per project ({workspace: {"backend": ["engine"], ...}}).
+    max_parallel_tasks: int = 3
+    task_timeout_s: int = 3600
+    task_lanes: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     
     # Wake word settings
     wake_word_enabled: bool = False
@@ -92,6 +97,7 @@ class Config:
         "workspace", "claude_model", "engine", "cursor_model", "continuous_mode_enabled", "continuous_mode_timeout", "whisper_model", "whisper_device", "input_device",
         "tts_enabled", "tts_voice", "tts_speed", "max_spoken_chars",
         "review_transcripts", "save_voice_samples", "tablet_access", "tablet_port",
+        "max_parallel_tasks", "task_timeout_s", "task_lanes",
     })
 
     @classmethod
@@ -172,6 +178,34 @@ def _short_str(v: Any, limit: int = 64) -> bool:
     return isinstance(v, str) and len(v) <= limit
 
 
+_LANE_BAD = frozenset("*?[]{}()!~$`\"'\\")
+_LANE_NAME_OK = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_")
+
+
+def _lane_path(v: Any) -> bool:
+    # Syntax only; tasks.validate_lanes checks the folder exists inside the project when used.
+    parts = v.replace("\\", "/").split("/") if isinstance(v, str) else []
+    return (isinstance(v, str) and 0 < len(v) <= 200 and not (_LANE_BAD & set(v))
+            and all(ord(c) >= 32 for c in v) and ".." not in parts and not v.startswith("/")
+            and not (len(v) > 1 and v[1] == ":") and any(p not in ("", ".") for p in parts))
+
+
+def _task_lanes(v: Any) -> bool:
+    if not isinstance(v, dict) or len(v) > 20:
+        return False
+    for ws, names in v.items():
+        if not _short_str(ws, 1024) or not isinstance(names, dict) or len(names) > 20:
+            return False
+        if len({str(n).casefold() for n in names}) != len(names):
+            return False  # voice matches names case-insensitively, so "Backend" would hide "backend"
+        for name, lanes in names.items():
+            if not (isinstance(name, str) and 0 < len(name) <= 32 and set(name) <= _LANE_NAME_OK):
+                return False
+            if not isinstance(lanes, list) or not 0 < len(lanes) <= 8 or not all(map(_lane_path, lanes)):
+                return False
+    return True
+
+
 _VALIDATORS: dict[str, Any] = {
     "workspace": lambda v: isinstance(v, str) and (v == "" or Path(v).is_dir()),
     "claude_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._[]" for c in v),
@@ -190,4 +224,7 @@ _VALIDATORS: dict[str, Any] = {
     "save_voice_samples": lambda v: isinstance(v, bool),
     "tablet_access": lambda v: isinstance(v, bool),
     "tablet_port": lambda v: _is_int(v) and 1024 <= v <= 65535,
+    "max_parallel_tasks": lambda v: _is_int(v) and 1 <= v <= 6,
+    "task_timeout_s": lambda v: _is_int(v) and 300 <= v <= 14_400,
+    "task_lanes": _task_lanes,
 }

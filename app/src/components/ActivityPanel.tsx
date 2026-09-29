@@ -1,8 +1,9 @@
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { send } from "../lib/client";
 import { useApp, type ToolItem } from "../store/app";
 import { Approvals } from "./Approvals";
+import { TaskBoard } from "./TaskBoard";
 
 const VERB: Record<string, string> = {
   Bash: "Command",
@@ -79,32 +80,89 @@ function Strip({ tool }: { tool: ToolItem }) {
 }
 
 export function ActivityPanel() {
+  const [tab, setTab] = useState<"activity" | "tasks">("activity");
+  const attention = useApp((s) => s.taskAttention);
+  const seen = useApp((s) => s.seenTasks);
+  const active = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "needs_approval").length);
+
+  const panel = useRef<HTMLElement>(null);
+  const tabs = ["activity", "tasks"] as const;
+
+  const pick = (t: "activity" | "tasks") => {
+    setTab(t);
+    if (t === "tasks") seen();
+  };
+  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const i = tabs.indexOf(tab);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    pick(tabs[next]!);
+    document.getElementById(`side-tab-${tabs[next]}`)?.focus();
+  };
+  // Keep the badge clear while the board is open and on screen. Below the xl breakpoint this
+  // panel stays mounted but hidden, and the sidebar's Tasks button shows the badge instead.
+  useEffect(() => {
+    if (tab === "tasks" && attention && panel.current?.offsetParent) seen();
+  }, [tab, attention, seen]);
+
+  return (
+    <aside ref={panel} className="app-activity flex h-full flex-col gap-3 border-l border-line bg-bg p-3" aria-label="Activity">
+      <Approvals />
+      <div role="tablist" aria-label="Side panel" className="flex gap-1 border-b border-line">
+        {tabs.map((t) => (
+          <button
+            key={t}
+            id={`side-tab-${t}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={`side-panel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
+            onKeyDown={onTabKey}
+            onClick={() => pick(t)}
+            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-2 pb-1.5 font-strip text-base font-semibold ${tab === t ? "border-cyan text-ink" : "border-transparent text-muted hover:text-ink"}`}
+          >
+            {t === "activity" ? "Activity" : "Tasks"}
+            {t === "tasks" && active > 0 && <span className="text-xs font-normal text-muted">{active}</span>}
+            {t === "tasks" && attention > 0 && tab !== "tasks" && (
+              <span className="rounded-full bg-amber px-1.5 text-[11px] leading-4 text-bg" aria-label={`${attention} new`}>
+                {attention}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      <div id={`side-panel-${tab}`} role="tabpanel" aria-labelledby={`side-tab-${tab}`} className="flex min-h-0 flex-1 flex-col gap-3">
+        {tab === "activity" ? <ActivityList /> : <TaskBoard />}
+      </div>
+    </aside>
+  );
+}
+
+function ActivityList() {
   const turns = useApp((s) => s.turns);
   const [scope, setScope] = useState<"latest" | "all">("latest");
   const withTools = turns.filter((t) => t.tools.length);
   const shown = scope === "latest" ? withTools.slice(-1) : withTools;
 
   return (
-    <aside className="app-activity flex h-full flex-col gap-3 border-l border-line bg-bg p-3" aria-label="Activity">
-      <Approvals />
-      <div className="flex items-center justify-between">
-        <h2 className="font-strip text-base font-semibold">Activity</h2>
-        {withTools.length > 1 && (
-          <div role="group" aria-label="Show activity for" className="flex rounded-md border border-line text-xs">
-            {(["latest", "all"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                aria-pressed={scope === v}
-                onClick={() => setScope(v)}
-                className={`px-2 py-0.5 ${scope === v ? "bg-raised text-ink" : "text-muted"}`}
-              >
-                {v === "latest" ? "This turn" : "Session"}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+    <>
+      {withTools.length > 1 && (
+        <div role="group" aria-label="Show activity for" className="flex self-end rounded-md border border-line text-xs">
+          {(["latest", "all"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={scope === v}
+              onClick={() => setScope(v)}
+              className={`px-2 py-0.5 ${scope === v ? "bg-raised text-ink" : "text-muted"}`}
+            >
+              {v === "latest" ? "This turn" : "Session"}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="scroll-quiet -mr-1 flex-1 overflow-y-auto pr-1">
         {shown.length === 0 ? (
           <p className="text-sm text-muted">Commands, file edits and searches show up here as Claude works.</p>
@@ -121,6 +179,6 @@ export function ActivityPanel() {
           ))
         )}
       </div>
-    </aside>
+    </>
   );
 }
