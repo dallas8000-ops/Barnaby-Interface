@@ -76,7 +76,8 @@ class HubTest(_HubBase):
         self.assertEqual(th["role"], "remote")
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(d.recv(), 0.2)  # the desktop didn't get the tablet's hello
-        await d.close(); await t.close()
+        await d.close()
+        await t.close()
 
     async def test_events_broadcast_to_every_client(self):
         d, _ = await self.desktop()
@@ -84,7 +85,8 @@ class HubTest(_HubBase):
         await self.bridge.emit({"type": "notice", "message": "hi"})
         self.assertEqual(json.loads(await d.recv())["message"], "hi")
         self.assertEqual(json.loads(await t.recv())["message"], "hi")
-        await d.close(); await t.close()
+        await d.close()
+        await t.close()
 
     async def test_desktop_and_tablet_coexist_and_both_dispatch(self):
         d, _ = await self.desktop()
@@ -93,7 +95,8 @@ class HubTest(_HubBase):
         await t.send(json.dumps({"type": "ping"}))
         await self.settle()
         self.assertEqual(self.orch.handled, ["ping", "ping"])
-        await d.close(); await t.close()
+        await d.close()
+        await t.close()
 
     async def test_emit_desktop_skips_tablets(self):
         d, _ = await self.desktop()
@@ -102,7 +105,8 @@ class HubTest(_HubBase):
         self.assertEqual(json.loads(await d.recv())["type"], "tablet_pairing")
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(t.recv(), 0.2)
-        await d.close(); await t.close()
+        await d.close()
+        await t.close()
 
     async def test_same_device_is_replaced_other_devices_coexist(self):
         a, _ = await self.tablet("d1")
@@ -114,7 +118,8 @@ class HubTest(_HubBase):
         await self.bridge.emit({"type": "notice", "message": "x"})
         self.assertEqual(json.loads(await b.recv())["type"], "notice")
         self.assertEqual(json.loads(await a2.recv())["type"], "notice")
-        await b.close(); await a2.close()
+        await b.close()
+        await a2.close()
 
     async def test_remote_connection_cap(self):
         socks = [ (await self.tablet(f"d{i}"))[0] for i in range(MAX_REMOTE_CLIENTS)]

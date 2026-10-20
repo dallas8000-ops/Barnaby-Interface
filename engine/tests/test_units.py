@@ -138,7 +138,8 @@ class StoreTest(unittest.TestCase):
         con.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, claude_session_id TEXT, title TEXT NOT NULL "
                     "DEFAULT 'New session', workspace TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
         con.execute("INSERT INTO sessions VALUES ('s1', 'c1', 'Old', '/w', 1, 1)")
-        con.commit(); con.close()
+        con.commit()
+        con.close()
         store = Store(path)
         try:
             self.assertEqual(store.list_sessions()[0]["engine"], "claude")
@@ -151,7 +152,7 @@ class StoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "s.db"
             store = Store(path)
-            for i in range(40):
+            for _ in range(40):
                 sid = store.create_session("/w")
                 store.add_turn(sid, user_text="u" * 500, assistant_text="a" * 500, tools=[], status="ok", cost_usd=None)
             store.close()

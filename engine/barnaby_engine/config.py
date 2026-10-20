@@ -67,19 +67,19 @@ class Config:
     max_parallel_tasks: int = 3
     task_timeout_s: int = 3600
     task_lanes: dict[str, dict[str, list[str]]] = field(default_factory=dict)
-    
+
     # Continuous mode settings
     continuous_mode_enabled: bool = False
     continuous_mode_timeout: float = 1.2  # seconds of silence that end a hands-free utterance
-    
+
     # Command chaining settings
     command_chain_enabled: bool = True
     command_chain_max_depth: int = 5
-    
+
     # IDE bridge settings
     ide_bridge_enabled: bool = False
     ide_bridge_port: int = 8765
-    
+
     # Workflow settings
     workflows_enabled: bool = True
     workflows_directory: str = ""        # empty = <data dir>/workflows; see resolve_workflows_dir()
@@ -148,16 +148,16 @@ def resolve_workflows_dir(configured: str) -> Path:
 def validate_config(config: Config) -> list[str]:
     """Validate configuration and return list of error messages."""
     errors = []
-    
+
     if config.continuous_mode_timeout < 0.5:
         errors.append("continuous_mode_timeout must be at least 0.5 seconds")
-    
+
     if config.command_chain_max_depth < 1 or config.command_chain_max_depth > 20:
         errors.append("command_chain_max_depth must be between 1 and 20")
-    
+
     if config.ide_bridge_port < 1024 or config.ide_bridge_port > 65535:
         errors.append("ide_bridge_port must be between 1024 and 65535")
-    
+
     return errors
 
 
