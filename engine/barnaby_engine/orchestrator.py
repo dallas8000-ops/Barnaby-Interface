@@ -46,10 +46,7 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        ClaudeAuthCheck, ClaudeLogin, ClaudeLoginCancel,
                        ev, ev_error, ev_state,
                        ev_continuous_mode_changed,
-                       ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
-                       ev_ide_connected, ev_ide_context_update,
-                       ev_workflow_started, ev_workflow_step_complete,
-                       ev_workflow_error)
+                       ev_command_chain_start, ev_command_chain_end, ev_command_chain_step)
 from .command_chain import split_chain
 from .continuous import VoiceSegmenter
 from .cursor_agent import cursor_grantable

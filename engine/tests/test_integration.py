@@ -1,6 +1,5 @@
 import unittest
 import unittest.mock
-from unittest.mock import Mock, patch
 from barnaby_engine.config import Config, resolve_workflows_dir
 from barnaby_engine.continuous import ContinuousMode
 from barnaby_engine.command_chain import CommandChain
@@ -18,20 +17,20 @@ class TestSubsystemIntegration(unittest.TestCase):
     def test_subsystems_initialized(self):
         """Test that all subsystems can be initialized with config."""
         config = Config()
-        
+
         continuous = ContinuousMode(timeout=config.continuous_mode_timeout)
         self.assertIsNotNone(continuous)
-        
+
         chain = CommandChain(max_depth=config.command_chain_max_depth)
         self.assertIsNotNone(chain)
-        
+
         ide_bridge = IdeBridge(port=config.ide_bridge_port)
         self.assertIsNotNone(ide_bridge)
-        
+
         workflow_engine = WorkflowEngine(workflows_dir=str(resolve_workflows_dir(config.workflows_directory)))
         self.assertEqual(workflow_engine.workflows_dir, self.data_dir / "workflows")
         self.assertIsNotNone(workflow_engine)
-        
+
         template_manager = TemplateManager()
         self.assertIsNotNone(template_manager)
 

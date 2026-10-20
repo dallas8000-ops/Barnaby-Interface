@@ -10,7 +10,7 @@ import unittest.mock
 from pathlib import Path
 
 from barnaby_engine.adaptive import VoiceProfile
-from barnaby_engine.agent import AgentError, SessionStarted, StreamParser, TextDelta, TurnResult, SIGN_IN_HINT
+from barnaby_engine.agent import AgentError, SessionStarted, StreamParser, TurnResult, SIGN_IN_HINT
 from barnaby_engine.claude_auth import ClaudeAuth, TOKEN_VAR
 from barnaby_engine.config import Config
 from barnaby_engine.orchestrator import Orchestrator
