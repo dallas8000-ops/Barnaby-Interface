@@ -41,7 +41,8 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        GetVoiceProfile, ListDevices, ListSessions, LoadSession,
                        ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
                        AudioClip, DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TabletPairStart,
-                       TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskFollowUp, TaskList,
+                       TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskDiscard, TaskFollowUp, TaskList,
+                       TaskOpenFolder,
                        TextSubmit, UpdateCorrection,
                        ClaudeAuthCheck, ClaudeLogin, ClaudeLoginCancel,
                        ev, ev_error, ev_state,
@@ -381,8 +382,9 @@ class Orchestrator:
             case Deny(request_id=rid):
                 if not await self.tasks.decide(rid, False):
                     await self._decide(rid, False)
-            case TaskCreate(engine=engine, instruction=instruction, lanes=lanes, title=title):
-                await self.tasks.create(engine, instruction, list(lanes), title)
+            case TaskCreate(engine=engine, instruction=instruction, lanes=lanes, title=title, checks=checks):
+                await self.tasks.create(engine, instruction, list(lanes), title,
+                                        None if checks is None else [c.model_dump() for c in checks])
             case TaskCancel(task_id=tid):
                 await self.tasks.cancel(tid)
             case TaskFollowUp(task_id=tid, text=text):
@@ -391,6 +393,10 @@ class Orchestrator:
                 await self.tasks.clear_finished()
             case TaskList():
                 await self.emit(self.tasks.snapshot())
+            case TaskDiscard(task_id=tid):
+                await self.tasks.discard(tid)
+            case TaskOpenFolder(task_id=tid):
+                await self.tasks.open_folder(tid)
             case NewSession():
                 await self._cancel_all()
                 self.session_id = self.claude_session_id = self.session_engine = None
@@ -1075,6 +1081,10 @@ class Orchestrator:
     async def _set_config(self, values: dict[str, Any]) -> None:
         before = self.config.public()
         rejected = self.config.apply_ui_update(values)
+        if "task_checks" in rejected and isinstance(values.get("task_checks"), dict):
+            why = self.config.checks_problem(values["task_checks"])
+            if why:
+                await self.emit(ev_error("config", why))
         self.config.save()
         after = self.config.public()
         self._apply_models()
@@ -1097,7 +1107,7 @@ class Orchestrator:
         if hasattr(self.recorder, "device"):
             self.recorder.device = self.config.input_device  # type: ignore[attr-defined]
         await self.emit(ev("config", config=after, rejected=rejected))
-        task_keys = ("workspace", "max_parallel_tasks", "task_lanes")
+        task_keys = ("workspace", "max_parallel_tasks", "task_lanes", "task_checks", "task_worktree_parallel")
         if any(before.get(k) != after.get(k) for k in task_keys):
             await self.emit(self.tasks.snapshot())
             await self.tasks.pump()  # a higher limit may let queued tasks start

@@ -37,7 +37,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from .protocol import PROTOCOL_VERSION, Auth, Command, SetConfig, ev, ev_error, parse_command
+from .protocol import PROTOCOL_VERSION, Auth, Command, SetConfig, TaskCreate, ev, ev_error, parse_command
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,8 @@ def permit(role: str, cmd: Command) -> str | None:
         blocked = sorted(set(cmd.values) - REMOTE_CONFIG_KEYS)
         if blocked:
             return f"Only the PC can change: {', '.join(blocked)}."
+    if isinstance(cmd, TaskCreate) and cmd.checks is not None:
+        return "Only the PC can choose a task's checks. Leave them out to use the project's checks."
     return None
 
 
