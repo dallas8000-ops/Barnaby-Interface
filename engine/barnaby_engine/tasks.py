@@ -258,7 +258,7 @@ from typing import Awaitable, Callable  # noqa: E402
 
 from . import worktrees  # noqa: E402
 from .agent import AgentError, SessionStarted, TextDelta, ToolStart, TurnResult  # noqa: E402
-from .checks import (CheckResult, failure_headline, failure_report, problem_with, run_checks,  # noqa: E402
+from .checks import (failure_headline, failure_report, problem_with, run_checks,  # noqa: E402
                      specs_from)
 from .cursor_agent import cursor_grantable  # noqa: E402
 from .protocol import ev, ev_error  # noqa: E402

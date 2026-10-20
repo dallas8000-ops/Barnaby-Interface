@@ -7,13 +7,12 @@ import os
 import shutil
 import stat
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 
 from barnaby_engine import worktrees
-from barnaby_engine.agent import SessionStarted, TextDelta, TurnResult
-from barnaby_engine.tasks import TaskRecord, pick_next
+from barnaby_engine.agent import TurnResult
+from barnaby_engine.tasks import TaskRecord
 from tests.test_task_manager import SID, GateAgent, _Base, cmd
 
 HAVE_GIT = shutil.which("git") is not None
