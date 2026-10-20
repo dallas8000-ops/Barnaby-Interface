@@ -134,8 +134,18 @@ def real_backends(config: Config) -> Backends:
     )
 
 
+def _loop_exception(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+    # Windows' proactor loop reports a peer that vanished (a tablet going to sleep, a closed tab)
+    # as an error inside its own cleanup callback. It's routine, not a fault.
+    if isinstance(context.get("exception"), ConnectionResetError):
+        log.debug("peer reset the connection: %s", context.get("message"))
+        return
+    loop.default_exception_handler(context)
+
+
 async def amain(args: argparse.Namespace,
                 make_backends: Callable[[Config], Backends] = real_backends) -> None:
+    asyncio.get_running_loop().set_exception_handler(_loop_exception)
     token = os.environ.get("BARNABY_TOKEN") or ""
     if not token:
         if not args.dev:
