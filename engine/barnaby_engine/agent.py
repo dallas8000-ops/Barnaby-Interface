@@ -118,6 +118,10 @@ SIGN_IN_HINT = ("\n\nClaude Code needs you to sign in again. Open a terminal, ru
                 "If you set CLAUDE_CODE_OAUTH_TOKEN, replace it with a fresh `claude setup-token` or remove it.")
 
 
+def needs_sign_in(text: str) -> bool:
+    return SIGN_IN_HINT in text
+
+
 class StreamParser:
     """Turns stream-json objects into AgentEvents.
 

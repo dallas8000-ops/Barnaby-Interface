@@ -16,6 +16,7 @@ import { initialState, useApp, type Approval } from "../store/app";
 import { ApprovalCard } from "./Approvals";
 import { Composer } from "./Composer";
 import { ChainProgress } from "./ChainProgress";
+import { ClaudeSignIn } from "./ClaudeSignIn";
 import { DevinKeyField } from "./DevinKeyField";
 import { EngineSwitch } from "./EngineSwitch";
 import { HandsFreeToggle } from "./HandsFreeToggle";
@@ -371,6 +372,62 @@ describe("DevinKeyField", () => {
     expect(sent).toEqual([{ type: "delete_secret", name: "devin" }]);
     await userEvent.click(screen.getByRole("button", { name: "Replace" }));
     expect(screen.getByPlaceholderText("apk_user_…")).toBeInTheDocument();
+  });
+});
+
+describe("ClaudeSignIn", () => {
+  it("offers Sign in to Claude when signed out, and asks the engine to start it", async () => {
+    useApp.setState({ claudeAuth: { state: "signed_out" } });
+    render(<ClaudeSignIn />);
+    expect(sent).toContainEqual({ type: "claude_auth_check" });
+    expect(screen.getByTestId("claude-auth-status")).toHaveTextContent("Not signed in");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in to Claude" }));
+    expect(sent).toContainEqual({ type: "claude_login" });
+  });
+
+  it("while waiting for the browser, shows Cancel instead of a second sign-in button", async () => {
+    useApp.setState({ claudeAuth: { state: "signing_in", detail: "Finish signing in in your browser." } });
+    render(<ClaudeSignIn />);
+    expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
+    expect(screen.getByText("Finish signing in in your browser.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(sent).toContainEqual({ type: "claude_login_cancel" });
+  });
+
+  it("when signed in, shows the method and a quieter Sign in again", () => {
+    useApp.setState({ claudeAuth: { state: "signed_in", method: "claude.ai" } });
+    render(<ClaudeSignIn />);
+    expect(screen.getByTestId("claude-auth-status")).toHaveTextContent("Signed in (claude.ai)");
+    expect(screen.getByRole("button", { name: "Sign in again" })).toBeInTheDocument();
+  });
+
+  it("an expired sign-in is called out as an error and offers Sign in again", () => {
+    useApp.setState({ claudeAuth: { state: "expired", detail: "Claude rejected your sign-in. Sign in again." } });
+    render(<ClaudeSignIn />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Claude rejected your sign-in");
+    expect(screen.getByRole("button", { name: "Sign in again" })).toBeEnabled();
+  });
+
+  it("hides the button when Claude Code isn't installed, and disables it while disconnected", () => {
+    useApp.setState({ claudeAuth: { state: "unavailable", detail: "Claude Code was not found." } });
+    const { unmount } = render(<ClaudeSignIn />);
+    expect(screen.queryByRole("button")).toBeNull();
+    unmount();
+    useApp.setState({ claudeAuth: { state: "signed_out" }, connection: "closed" as never });
+    render(<ClaudeSignIn />);
+    expect(screen.getByRole("button", { name: "Sign in to Claude" })).toBeDisabled();
+  });
+
+  it("is part of Settings", () => {
+    useApp.setState({
+      config: {
+        workspace: "/proj", input_device: null, whisper_model: "small.en", continuous_mode_timeout: 1.2,
+        claude_model: "", cursor_model: "", tts_enabled: true, tts_speed: 1.05, tts_voice: "am_michael",
+        max_spoken_chars: 400, review_transcripts: false, save_voice_samples: false,
+      } as never,
+    });
+    render(<SettingsDialog onClose={() => {}} />);
+    expect(screen.getByTestId("claude-auth-status")).toBeInTheDocument();
   });
 });
 

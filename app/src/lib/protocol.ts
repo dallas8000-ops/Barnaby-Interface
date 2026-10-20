@@ -15,6 +15,13 @@ export type ComponentStatus = "loading" | "ready" | "error";
 export type Editor = "vscode" | "cursor";
 export type AgentEngine = "claude" | "cursor" | "devin";
 export type SecretName = "devin";
+
+/** Claude Code's sign-in, as the engine last saw it. "expired": Claude rejected a real turn. */
+export interface ClaudeAuth {
+  state: "unknown" | "signed_in" | "signed_out" | "expired" | "signing_in" | "failed" | "unavailable";
+  detail?: string;
+  method?: string;
+}
 export type ClientRole = "desktop" | "remote";
 
 export interface TabletDevice {
@@ -163,6 +170,7 @@ export type EngineEvent =
       sessions: SessionSummary[];
       components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
       tasks?: { type: "tasks" } & TasksSnapshot;
+      claude_auth?: ClaudeAuth;
       protocol: number;
     }
   | { type: "state"; state: EngineState; detail: string | null }
@@ -185,6 +193,7 @@ export type EngineEvent =
   | { type: "learned"; heard: string; meant: string }
   | { type: "devices"; items: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[] }
   | { type: "secrets"; items: Record<SecretName, boolean> }
+  | ({ type: "claude_auth" } & ClaudeAuth)
   | { type: "paired"; token: string; device_id: string }
   | { type: "pair_error"; message: string }
   | { type: "say"; text: string }
@@ -242,6 +251,9 @@ export type Command =
   // The key goes to the engine once and is never sent back: only whether one is saved.
   | { type: "set_secret"; name: SecretName; value: string }
   | { type: "delete_secret"; name: SecretName }
+  | { type: "claude_login" }
+  | { type: "claude_login_cancel" }
+  | { type: "claude_auth_check" }
   | { type: "audio_clip"; pcm_b64: string }
   | { type: "tablet_pair_start" }
   | { type: "tablet_revoke"; device_id: string }

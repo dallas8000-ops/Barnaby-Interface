@@ -188,3 +188,37 @@ def task_demo_script(prompt: str, grant: Grant | None) -> list[AgentEvent]:
     return [SessionStarted(MOCK_SESSION, "mock"),
             ToolStart("k2", "Read", {"file_path": "README.md"}), ToolEnd("k2", True, "…"),
             TextDelta(text), TurnResult(text, MOCK_SESSION, False, 0.02, 1500)]
+
+
+class FakeClaudeAuth:
+    """Stands in for ClaudeAuth: a sign-in that never opens a browser."""
+
+    def __init__(self, *, signed_in: bool = False, login_ok: bool = True, hold: bool = False,
+                 error: str | None = None, had_token: bool = False, delay: float = 0.0) -> None:
+        self.signed_in = signed_in
+        self.login_ok = login_ok
+        self.hold = hold          # keep the sign-in "waiting on the browser" until cancelled
+        self.error = error
+        self.had_token = had_token
+        self.delay = delay
+        self.logins = 0
+        self.cancels = 0
+
+    async def status(self):
+        from barnaby_engine.claude_auth import AuthStatus
+        return AuthStatus(self.signed_in, "claude.ai" if self.signed_in else None, self.error)
+
+    async def login(self) -> bool:
+        self.logins += 1
+        if self.hold:
+            await asyncio.Event().wait()
+        await asyncio.sleep(self.delay)
+        if self.login_ok:
+            self.signed_in = True
+        return self.login_ok
+
+    async def cancel(self) -> None:
+        self.cancels += 1
+
+    def drop_stale_token(self) -> bool:
+        return self.had_token

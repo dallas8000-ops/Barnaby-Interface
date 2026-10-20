@@ -56,6 +56,14 @@ On first launch, pick your project folder. The speech models (about 250 MB) down
 
 The switch under the instruction box picks which coding agent runs the next instruction. You can also say it: "Cursor, fix the build", "have Claude run the tests", "Devin, add a health check", or just "use Cursor". Each session belongs to the agent that started it (a Claude session can't be resumed by Cursor), so switching starts a new session and clears pending approvals. Reopening an old session switches back to its agent.
 
+### Claude Code sign-in
+
+Barnaby has no Claude login of its own: it runs the `claude` program, which keeps the login. **Settings → Claude sign-in** shows whether you're signed in and has a **Sign in to Claude** button. The button runs Claude Code's own `claude auth login`: your browser opens, you approve, and the status turns green when it finishes, with no restart. A console window opens beside the browser for the rare case where Claude asks you to paste a code. Cancel stops it, and it gives up after 5 minutes.
+
+- **An old `CLAUDE_CODE_OAUTH_TOKEN` is retired.** That Windows setting outranks the saved login, so a revoked one blocks every turn. The sign-in runs without it, and afterwards Barnaby ignores it for this session. Remove it from Windows settings too so it stays gone after a restart.
+- **"Signed in" can lag.** Claude Code only reports that a login exists, not whether the server still accepts it. A turn rejected with a 401 flips the status to **Sign-in expired**, and the button changes to **Sign in again**.
+- **PC only.** A paired tablet can't start a sign-in.
+
 Cursor needs its command-line agent, installed and signed in once:
 
 ```powershell
@@ -212,9 +220,9 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 441 tests
-cd app;    npm run typecheck; npm test                                   # 111 tests
-.\scripts\e2e.ps1                     # 12 E2E flows: real engine process, scripted agent and fake audio (tests/e2e_engine.py)
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 457 tests
+cd app;    npm run typecheck; npm test                                   # 119 tests
+.\scripts\e2e.ps1                     # 13 E2E flows: real engine process, scripted agent and fake audio (tests/e2e_engine.py)
 ```
 
 The scripted agent and fake audio live only under `engine/tests/`. The shipped engine has no mock mode: it always uses the microphone, Whisper, Kokoro and your real `claude` / `agent` / Devin.

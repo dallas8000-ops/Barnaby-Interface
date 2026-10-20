@@ -126,6 +126,19 @@ class ListDevices(_Cmd):
     type: Literal["list_devices"]
 
 
+class ClaudeLogin(_Cmd):
+    """Run Claude Code's own sign-in (browser). Desktop only."""
+    type: Literal["claude_login"]
+
+
+class ClaudeLoginCancel(_Cmd):
+    type: Literal["claude_login_cancel"]
+
+
+class ClaudeAuthCheck(_Cmd):
+    type: Literal["claude_auth_check"]
+
+
 class ListTemplates(_Cmd):
     type: Literal["list_templates"]
 
@@ -222,6 +235,7 @@ Command = Annotated[
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
         ListTemplates, RunTemplate, SetSecret, DeleteSecret, AudioClip, TabletPairStart, TabletRevoke,
         TaskCreate, TaskCancel, TaskFollowUp, TaskClear, TaskList,
+        ClaudeLogin, ClaudeLoginCancel, ClaudeAuthCheck,
     ],
     Field(discriminator="type"),
 ]

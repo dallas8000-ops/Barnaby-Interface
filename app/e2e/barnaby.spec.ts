@@ -198,6 +198,20 @@ test("Devin: key saved in Settings enables Devin, which runs a turn; removing th
   await expect(page.getByRole("radio", { name: "Claude" })).toHaveAttribute("aria-checked", "true");
 });
 
+test("Claude: Settings shows signed out, Sign in to Claude runs and completes, and the status turns green", async ({ page }) => {
+  await fresh(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const status = dialog.getByTestId("claude-auth-status");
+  await expect(status).toHaveText("Not signed in");
+  await dialog.getByRole("button", { name: "Sign in to Claude" }).click();
+  await expect(status).toHaveText(/Waiting for you to finish in the browser/);
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+  await expect(status).toHaveText("Signed in (claude.ai)");
+  await expect(dialog.getByRole("button", { name: "Sign in again" })).toBeVisible();
+  await page.keyboard.press("Escape");
+});
+
 test("tablet: pair by QR link, hold to talk, approve on the tablet, hear it there, removed from the PC", async ({ page, browser }) => {
   // PC window: tablet access is on (see playwright.config); make a pairing link.
   await fresh(page);

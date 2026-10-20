@@ -28,6 +28,7 @@ from . import __version__
 from .adaptive import VoiceProfile
 from .agent import AgentError, ClaudeCodeAgent, resolve_claude
 from .cursor_agent import CursorAgent, resolve_cursor
+from .claude_auth import ClaudeAuth
 from .devin_agent import DevinAgent, DevinClient
 from .vault import Vault, VaultError
 from .remote import RemoteServer
@@ -81,6 +82,7 @@ class Backends:
     task_factory: Callable[[str, str], Any]
     transcriber_factory: Callable[[Config], Any] | None = None
     speaker_factory: Callable[[Config], Any] | None = None
+    claude_auth: Any = None
     tablet_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -131,6 +133,7 @@ def real_backends(config: Config) -> Backends:
         task_factory=make_task_factory(config, devin_key, data_dir()),
         transcriber_factory=tfactory,
         speaker_factory=sfactory,
+        claude_auth=ClaudeAuth(config.claude_bin),
     )
 
 
@@ -167,7 +170,7 @@ async def amain(args: argparse.Namespace,
                         engine_available=be.available, templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
                         transcriber_factory=be.transcriber_factory, speaker_factory=be.speaker_factory,
-                        vault=be.vault, emit_desktop=bridge.emit_desktop,
+                        vault=be.vault, emit_desktop=bridge.emit_desktop, claude_auth=be.claude_auth,
                         task_agent_factory=be.task_factory,
                         task_forget=lambda tid: shutil.rmtree(data_dir() / "cursor-tasks" / tid, ignore_errors=True),
                         tablet_factory=lambda port, on_change: RemoteServer(

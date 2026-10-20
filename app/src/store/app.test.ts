@@ -137,6 +137,27 @@ describe("secrets and engines events", () => {
   });
 });
 
+describe("claude sign-in state", () => {
+  it("starts unknown, takes hello's value, and follows claude_auth events", () => {
+    expect(initialState.claudeAuth).toEqual({ state: "unknown" });
+    let s = reduceEvent(initialState, { type: "hello", state: "idle", config: {} as never, session_id: null,
+      speaking: false, sessions: [], components: {} as never, protocol: 1, claude_auth: { state: "signed_out" } });
+    expect(s.claudeAuth.state).toBe("signed_out");
+    s = reduceEvent(s, { type: "claude_auth", state: "signing_in", detail: "Finish in your browser." });
+    expect(s.claudeAuth).toEqual({ state: "signing_in", detail: "Finish in your browser.", method: undefined });
+    s = reduceEvent(s, { type: "claude_auth", state: "signed_in", method: "claude.ai" });
+    expect(s.claudeAuth.state).toBe("signed_in");
+    expect(s.claudeAuth.detail).toBeUndefined();
+  });
+
+  it("a hello without claude_auth (older engine) keeps what we had", () => {
+    const had = { ...initialState, claudeAuth: { state: "expired" as const } };
+    const s = reduceEvent(had, { type: "hello", state: "idle", config: {} as never, session_id: null,
+      speaking: false, sessions: [], components: {} as never, protocol: 1 });
+    expect(s.claudeAuth.state).toBe("expired");
+  });
+});
+
 describe("tablet access state", () => {
   const status = { enabled: true, running: true, port: 8766, urls: ["https://192.168.1.20:8766/"], devices: [] };
 

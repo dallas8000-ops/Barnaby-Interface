@@ -8,6 +8,7 @@ import type {
   EngineEvent,
   EngineInfo,
   SecretName,
+  ClaudeAuth,
   ClientRole,
   TabletStatus,
   EngineState,
@@ -84,6 +85,7 @@ export interface AppState {
   config: Config | null;
   engines: EngineInfo[];
   secrets: Record<SecretName, boolean>;
+  claudeAuth: ClaudeAuth;
   role: ClientRole;
   tablet: TabletStatus | null;
   tabletPairing: { url: string; expiresAt: number } | null;
@@ -134,6 +136,7 @@ export const initialState: AppState = {
   config: null,
   engines: [{ name: "claude", available: true }],
   secrets: { devin: false },
+  claudeAuth: { state: "unknown" },
   role: "desktop",
   tablet: null,
   tabletPairing: null,
@@ -245,6 +248,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         templates: e.templates ?? s.templates,
         continuousMode: e.handsfree ?? s.continuousMode,
         secrets: e.secrets ?? s.secrets,
+        claudeAuth: e.claude_auth ?? s.claudeAuth,
         role: e.role ?? s.role,
         tablet: e.tablet ?? s.tablet,
         pairError: null,
@@ -385,6 +389,8 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, devices: e.items };
     case "secrets":
       return { ...s, secrets: e.items };
+    case "claude_auth":
+      return { ...s, claudeAuth: { state: e.state, detail: e.detail, method: e.method } };
     case "tablet_status": {
       const { type: _t, ...status } = e;
       // A new device means the one-time link was just used: stop showing it.

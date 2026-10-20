@@ -33,7 +33,8 @@ import numpy as np
 from . import lexicon
 from .adaptive import VoiceProfile
 from .agent import (Agent, AgentError, SessionStarted, TextDelta, ToolEnd,
-                    ToolStart, TurnResult)
+                    ToolStart, TurnResult, needs_sign_in)
+from .claude_auth import ClaudeAuth
 from .config import Config, data_dir
 from .editors import EditorError, open_in_editor
 from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft,
@@ -42,6 +43,7 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        AudioClip, DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TabletPairStart,
                        TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskFollowUp, TaskList,
                        TextSubmit, UpdateCorrection,
+                       ClaudeAuthCheck, ClaudeLogin, ClaudeLoginCancel,
                        ev, ev_error, ev_state,
                        ev_continuous_mode_changed,
                        ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
@@ -219,7 +221,8 @@ class Orchestrator:
                  emit_desktop: Emit | None = None,
                  tablet_factory: Callable[[int, Callable[[], None]], Any] | None = None,
                  task_agent_factory: Callable[[str, str], Agent] | None = None,
-                 task_forget: Callable[[str], None] | None = None) -> None:
+                 task_forget: Callable[[str], None] | None = None,
+                 claude_auth: ClaudeAuth | None = None) -> None:
         self.config = config
         self.store = store
         self.profile = profile
@@ -278,6 +281,11 @@ class Orchestrator:
         self._speech_ended_at = 0.0      # echo guard: don't listen right after Barnaby speaks
         self._cancel_requested = False
         self._notices: list[str] = []
+        # Claude sign-in (None in tests that don't exercise it: nothing then touches the real CLI).
+        self._claude_auth = claude_auth
+        self._claude_state: dict[str, Any] = {"state": "unknown"}
+        self._claude_prev: dict[str, Any] = self._claude_state
+        self._claude_login_task: asyncio.Task[None] | None = None
         # Last-known component status, replayed in `hello`: load events fire at
         # startup, usually before any UI has connected to receive them.
         self._components: dict[str, dict[str, Any]] = {
@@ -294,10 +302,13 @@ class Orchestrator:
         self.tasks.load()
         self._refresh_project_terms()
         asyncio.create_task(self._preload())
+        asyncio.create_task(self._claude_check())
         await self._apply_handsfree()
         await self._apply_tablet(announce=False)
 
     async def shutdown(self) -> None:
+        if self._claude_login_task and not self._claude_login_task.done():
+            await self._claude_login_cancel()
         self._stop_handsfree()
         await self._stop_tablet()
         await self.tasks.shutdown()
@@ -311,7 +322,7 @@ class Orchestrator:
                   templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(), tablet=self._tablet_status(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components,
-                  tasks=self.tasks.snapshot())
+                  tasks=self.tasks.snapshot(), claude_auth=self._claude_state)
 
     def take_notices(self) -> list[str]:
         """Startup notices (e.g. a repaired database) to show once, to the first window that connects."""
@@ -423,6 +434,12 @@ class Orchestrator:
                 await self._set_secret(name, value.get_secret_value())
             case DeleteSecret(name=name):
                 await self._set_secret(name, None)
+            case ClaudeLogin():
+                await self._claude_login()
+            case ClaudeLoginCancel():
+                await self._claude_login_cancel()
+            case ClaudeAuthCheck():
+                await self._claude_check()
             case ListDevices():
                 devices = await asyncio.get_running_loop().run_in_executor(None, list_input_devices)
                 await self.emit(ev("devices", items=devices))
@@ -795,6 +812,11 @@ class Orchestrator:
                            cost_usd=result.cost_usd if result else None,
                            duration_ms=result.duration_ms if result else None))
         self._persist(display_text, text, tools, status, result.cost_usd if result else None)
+        if self._claude_auth is not None and self.session_engine == "claude" and result:
+            if result.is_error and needs_sign_in(text):
+                await self._claude_set("expired", "Claude rejected your sign-in. Sign in again.")
+            elif not result.is_error and self._claude_state["state"] in ("expired", "signed_out"):
+                await self._claude_set("signed_in")
 
         if needs_approval and result:
             await self._open_approvals(turn_id, result)  # a chain stays paused until the decision
@@ -1200,6 +1222,72 @@ class Orchestrator:
             return
         audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
         await self._process_audio(audio)
+
+    async def _claude_set(self, state: str, detail: str | None = None, method: str | None = None) -> None:
+        self._claude_state = {"state": state, **({"detail": detail} if detail else {}),
+                              **({"method": method} if method else {})}
+        await self.emit(ev("claude_auth", **self._claude_state))
+
+    async def _claude_check(self) -> None:
+        """Read the CLI's sign-in status. Leaves an in-progress sign-in and a known-expired login alone."""
+        if self._claude_auth is None or self._claude_state["state"] in ("signing_in", "expired"):
+            return
+        status = await self._claude_auth.status()
+        if status.error:
+            await self._claude_set("unavailable", status.error)
+        elif status.signed_in:
+            await self._claude_set("signed_in", method=status.method)
+        else:
+            await self._claude_set("signed_out")
+
+    async def _claude_login(self) -> None:
+        if self._claude_auth is None:
+            await self.emit(ev_error("claude_auth", "Signing in from Barnaby isn't available here."))
+            return
+        if self._claude_login_task and not self._claude_login_task.done():
+            return  # already waiting on the browser
+        self._claude_prev = self._claude_state
+        await self._claude_set("signing_in", "Finish signing in in your browser. A console window is open too, in case it asks you to paste a code.")
+        self._claude_login_task = asyncio.create_task(self._claude_login_flow())
+
+    async def _claude_login_flow(self) -> None:
+        auth = self._claude_auth
+        assert auth is not None
+        try:
+            finished = await auth.login()
+        except asyncio.CancelledError:
+            raise
+        except AgentError as exc:
+            await self._claude_set("failed", str(exc))
+            return
+        except OSError as exc:
+            await self._claude_set("failed", f"Couldn't start Claude Code's sign-in: {exc}")
+            return
+        if not finished:
+            await self._claude_set("failed", "The sign-in window closed before it finished. Try again.")
+            return
+        # The old token would outrank the login we just made, so retire it for this session first.
+        dropped = auth.drop_stale_token()
+        status = await auth.status()
+        if not status.signed_in:
+            await self._claude_set("failed", "Sign-in finished, but Claude Code still reports you're signed out.")
+            return
+        await self._claude_set("signed_in", method=status.method)
+        await self.emit(ev("notice", message="Signed in to Claude." + (
+            " The old CLAUDE_CODE_OAUTH_TOKEN is ignored from now on; remove it from Windows settings too." if dropped else "")))
+
+    async def _claude_login_cancel(self) -> None:
+        task = self._claude_login_task
+        if self._claude_auth is None or task is None or task.done():
+            return
+        await self._claude_auth.cancel()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        self._claude_state = self._claude_prev
+        await self.emit(ev("claude_auth", **self._claude_state))
 
     async def _set_secret(self, name: str, value: str | None) -> None:
         """Save or remove a key. Only the outcome is reported, never the value."""

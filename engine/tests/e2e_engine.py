@@ -11,8 +11,8 @@ import asyncio
 from barnaby_engine.__main__ import DEVIN_NEEDS_KEY, Backends, _setup_logging, amain, parse_args
 from barnaby_engine.config import Config, data_dir
 from barnaby_engine.vault import MemoryCredentials, Vault
-from tests.doubles import (FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent, devin_demo_script,
-                           task_demo_script)
+from tests.doubles import (FakeClaudeAuth, FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent,
+                           devin_demo_script, task_demo_script)
 
 
 def e2e_backends(config: Config) -> Backends:
@@ -28,6 +28,7 @@ def e2e_backends(config: Config) -> Backends:
         agents={"claude": ScriptedAgent(step_delay=0.35), "cursor": ScriptedAgent(step_delay=0.35),
                 "devin": ScriptedAgent(step_delay=0.35, default=devin_demo_script)},
         vault=vault, available=available,
+        claude_auth=FakeClaudeAuth(signed_in=False, delay=0.6),
         task_factory=lambda engine, task_id: ScriptedAgent(step_delay=0.6, default=task_demo_script),
         # The test machine's Windows network category must not decide whether tablet access starts.
         tablet_kwargs={"network_check": lambda: None},

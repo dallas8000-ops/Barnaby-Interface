@@ -5,6 +5,7 @@ import type { Config } from "../lib/protocol";
 import { SKINS, applySkin, readSkin, saveSkin, type Skin } from "../lib/skin";
 import { useApp } from "../store/app";
 import { DevinKeyField } from "./DevinKeyField";
+import { ClaudeSignIn } from "./ClaudeSignIn";
 import { RemoteSettings } from "./RemoteSettings";
 import { TabletAccessSection } from "./TabletAccessSection";
 import { TasksSettings } from "./TasksSettings";
@@ -137,6 +138,9 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
               Change
             </button>
           </div>
+        </Field>
+        <Field label="Claude sign-in" hint="Claude Code keeps its own login. This opens its sign-in in your browser and finishes it here.">
+          <ClaudeSignIn />
         </Field>
         <Field label="Claude model" htmlFor="model" hint="Leave empty to use your Claude Code default. Examples: opus, sonnet.">
           <input
