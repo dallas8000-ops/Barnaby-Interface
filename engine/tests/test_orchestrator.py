@@ -9,7 +9,7 @@ from barnaby_engine.adaptive import VoiceProfile
 from barnaby_engine.agent import (AgentError, Denial, SessionStarted, TextDelta,
                                   ToolEnd, ToolStart, TurnResult)
 from barnaby_engine.config import Config
-from barnaby_engine.mock import (MOCK_SESSION, FakeRecorder, FakeSpeaker,
+from tests.doubles import (MOCK_SESSION, FakeRecorder, FakeSpeaker,
                                  FakeTranscriber, ScriptedAgent)
 from barnaby_engine.orchestrator import Orchestrator
 from barnaby_engine.protocol import parse_command
@@ -279,6 +279,31 @@ class OrchestratorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["session_id"], MOCK_SESSION)
         self.assertIn("approved", second["prompt"])
         self.assertEqual(self.states()[-1], "idle")
+
+    async def test_repeated_denials_of_the_same_action_make_one_card(self):
+        push = {"command": "git push origin main"}
+        denials = [Denial("t1", "Bash", push), Denial("t2", "Bash", dict(push)),
+                   Denial("t3", "Bash", {"command": "git status; git remote -v"})]
+        await self.build(scripts=[simple("Blocked.", denials), simple("Pushed.")])
+        await self.orch.handle(cmd("text_submit", text="push"))
+        await self.settle()
+        cards = self.of("approval_required")
+        self.assertEqual([c["summary"] for c in cards].count("git push origin main"), 1)
+        self.assertEqual(len(cards), 2)
+        for card in cards:
+            await self.orch.handle(cmd("approve", request_id=card["request_id"]))
+        await self.settle()
+        self.assertEqual(self.states()[-1], "idle")  # approving the distinct cards is enough to resume
+
+    async def test_history_failure_never_leaves_the_turn_stuck(self):
+        import sqlite3
+        await self.build(scripts=[simple("Done.")])
+        self.store.add_turn = unittest.mock.Mock(side_effect=sqlite3.DatabaseError("database disk image is malformed"))
+        await self.orch.handle(cmd("text_submit", text="hello"))
+        await self.settle()
+        self.assertEqual(self.states()[-1], "idle")
+        self.assertEqual(self.of("turn_end")[-1]["status"], "ok")
+        self.assertIn("history", [e["code"] for e in self.of("error")])
 
     async def test_deny_resumes_without_grant(self):
         denial = Denial("t5", "Bash", {"command": "git push origin main"})

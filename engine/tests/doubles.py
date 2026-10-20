@@ -1,7 +1,7 @@
-"""Deterministic stand-ins for hardware/model/agent dependencies.
+"""TEST DOUBLES ONLY: never imported by the shipped engine.
 
-Used by the unit tests and by ``python -m barnaby_engine --mock`` so the UI and
-Playwright E2E suite run with no microphone, no models and no API spend.
+Deterministic stand-ins for hardware/model/agent dependencies, used by the unit tests
+and by ``tests/e2e_engine.py`` (the Playwright harness): no microphone, no models, no API spend.
 """
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from typing import Any, AsyncIterator, Callable
 
 import numpy as np
 
-from .agent import (AgentEvent, Denial, SessionStarted, TextDelta, ToolEnd,
+from barnaby_engine.agent import (AgentEvent, Denial, SessionStarted, TextDelta, ToolEnd,
                     ToolStart, TurnResult)
-from .safety import Grant
+from barnaby_engine.safety import Grant
 
 MOCK_SESSION = "11111111-2222-4333-8444-555555555555"
 

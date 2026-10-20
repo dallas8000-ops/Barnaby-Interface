@@ -247,10 +247,6 @@ def ev_error(code: str, message: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- voice feature events
-def ev_wake_word_detected(timestamp: float) -> dict[str, Any]:
-    return ev("wake_word_detected", timestamp=timestamp)
-
-
 def ev_continuous_mode_changed(active: bool) -> dict[str, Any]:
     return ev("continuous_mode_changed", active=active)
 
@@ -291,7 +287,3 @@ def ev_workflow_step_complete(workflow_id: str, step_number: int, success: bool)
 
 def ev_workflow_error(workflow_id: str, error_message: str) -> dict[str, Any]:
     return ev("workflow_error", workflow_id=workflow_id, error_message=error_message)
-
-
-def ev_macro_recorded(macro_id: str, macro_name: str, step_count: int) -> dict[str, Any]:
-    return ev("macro_recorded", macro_id=macro_id, macro_name=macro_name, step_count=step_count)

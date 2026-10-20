@@ -10,7 +10,7 @@ from pathlib import Path
 from barnaby_engine.adaptive import VoiceProfile
 from barnaby_engine.agent import AgentError, Denial, SessionStarted, TextDelta, ToolStart, TurnResult
 from barnaby_engine.config import Config
-from barnaby_engine.mock import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
+from tests.doubles import FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
 from barnaby_engine.orchestrator import Orchestrator
 from barnaby_engine.protocol import parse_command
 from barnaby_engine.safety import Grant, Scope

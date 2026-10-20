@@ -72,6 +72,19 @@ class StreamParserEdgeCasesTest(unittest.TestCase):
                                    "session_id": None, "result": ""})
         self.assertTrue(out[0].is_error)
 
+    def test_expired_sign_in_tells_the_user_how_to_fix_it(self):
+        # Shape captured from `claude -p --output-format stream-json` with a revoked OAuth token.
+        out = StreamParser().feed({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 401,
+                                   "session_id": "s", "result": "Failed to authenticate. API Error: 401 OAuth access token has been revoked."})
+        self.assertTrue(out[0].is_error)
+        self.assertIn("revoked", out[0].text)
+        self.assertIn("/login", out[0].text)
+
+    def test_other_errors_get_no_sign_in_hint(self):
+        out = StreamParser().feed({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                   "session_id": None, "result": "Reached max turns"})
+        self.assertNotIn("/login", out[0].text)
+
     def test_tool_result_list_content_and_truncation(self):
         out = StreamParser().feed({"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "t", "content": [{"type": "text", "text": "y" * 2000}]}]}})

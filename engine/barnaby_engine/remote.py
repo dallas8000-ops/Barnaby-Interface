@@ -499,6 +499,10 @@ MAX_PENDING_PER_IP = 4               # unauthenticated sockets waiting on their 
 MAX_PENDING = 16
 
 
+class TabletBlocked(RuntimeError):
+    """Tablet access is deliberately off (e.g. the network is Public). Not a fault: show the reason."""
+
+
 def _default_static_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "app" / "dist"
 
@@ -544,7 +548,7 @@ class RemoteServer:
 
         problem = await asyncio_to_thread(self._network_check)
         if problem:
-            raise RuntimeError(problem)
+            raise TabletBlocked(problem)
         cert, key = await asyncio_to_thread(self.tls.ensure)
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2

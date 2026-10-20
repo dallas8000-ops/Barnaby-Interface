@@ -199,6 +199,10 @@ class Bridge:
             hello["protocol"] = PROTOCOL_VERSION
             hello["role"] = info.role
             await self._send(ws, info, hello)
+            take = getattr(self.orchestrator, "take_notices", None)
+            if take is not None and info.role == "desktop":
+                for message in take():
+                    await self._send(ws, info, ev("notice", message=message))
             async for raw in ws:
                 try:
                     cmd = parse_command(raw)

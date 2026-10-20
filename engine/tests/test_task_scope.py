@@ -8,7 +8,7 @@ from pathlib import Path
 from barnaby_engine.agent import ClaudeCodeAgent, build_argv, build_settings
 from barnaby_engine.cursor_agent import CursorGuard
 from barnaby_engine.devin_agent import DevinAgent
-from barnaby_engine.mock import ScriptedAgent
+from tests.doubles import ScriptedAgent
 from barnaby_engine.safety import Grant, Scope, grant_for_task, lane_of
 from tests.helpers import make_fake_claude, record_of
 

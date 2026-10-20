@@ -110,7 +110,6 @@ export interface AppState {
   devices: { index: number; name: string; default: boolean; auto?: boolean; loopback?: boolean }[];
   
   // Voice features
-  wakeWordActive: boolean;
   continuousMode: boolean;
   chain: ChainView | null;
   templates: TemplateSummary[];
@@ -124,7 +123,6 @@ export interface AppState {
   // Workflows
   workflowActive: boolean;
   currentWorkflow: string | null;
-  macroRecording: boolean;
 }
 
 export const initialState: AppState = {
@@ -160,7 +158,6 @@ export const initialState: AppState = {
   devices: [],
   
   // Voice features
-  wakeWordActive: false,
   continuousMode: false,
   chain: null,
   templates: [],
@@ -173,7 +170,6 @@ export const initialState: AppState = {
   // Workflows
   workflowActive: false,
   currentWorkflow: null,
-  macroRecording: false,
 };
 
 let toastSeq = 0;
@@ -412,8 +408,6 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
     case "pong":
       return s;
     // Voice feature events
-    case "wake_word_detected":
-      return { ...s, wakeWordActive: true };
     case "continuous_mode_changed":
       return { ...s, continuousMode: e.active };
     case "draft_command":
@@ -445,8 +439,6 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return s;
     case "workflow_error":
       return { ...s, workflowActive: false, currentWorkflow: null };
-    case "macro_recorded":
-      return { ...s, macroRecording: false };
   }
 }
 

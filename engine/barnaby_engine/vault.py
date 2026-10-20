@@ -127,7 +127,7 @@ class EnvCredentials:
 
 
 class MemoryCredentials:
-    """In-process store for --mock runs and tests."""
+    """In-process store for tests and the E2E harness."""
 
     def __init__(self) -> None:
         self.items: dict[str, tuple[str, str]] = {}

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
 
 permissions:
@@ -51,7 +51,7 @@ jobs:
         run: npm test
       - working-directory: app
         run: npx playwright install --with-deps chromium
-      - name: E2E against engine --mock
+      - name: E2E (real engine process, scripted agent harness)
         working-directory: app
         run: npx playwright test
       - if: failure()

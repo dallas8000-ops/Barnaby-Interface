@@ -10,7 +10,7 @@ import numpy as np
 from barnaby_engine.adaptive import VoiceProfile
 from barnaby_engine.agent import SessionStarted, TextDelta, TurnResult
 from barnaby_engine.config import Config
-from barnaby_engine.mock import MOCK_SESSION, FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
+from tests.doubles import MOCK_SESSION, FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent
 from barnaby_engine.orchestrator import Orchestrator, classify_draft_command
 from barnaby_engine.protocol import parse_command
 from barnaby_engine.store import Store

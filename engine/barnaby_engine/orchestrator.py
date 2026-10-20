@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import logging
 import re
+import sqlite3
 import time
 import uuid
 import wave
@@ -41,14 +43,15 @@ from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft
                        TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskFollowUp, TaskList,
                        TextSubmit, UpdateCorrection,
                        ev, ev_error, ev_state,
-                       ev_wake_word_detected, ev_continuous_mode_changed,
+                       ev_continuous_mode_changed,
                        ev_command_chain_start, ev_command_chain_end, ev_command_chain_step,
                        ev_ide_connected, ev_ide_context_update,
                        ev_workflow_started, ev_workflow_step_complete,
-                       ev_workflow_error, ev_macro_recorded)
+                       ev_workflow_error)
 from .command_chain import split_chain
 from .continuous import VoiceSegmenter
 from .cursor_agent import cursor_grantable
+from .remote import TabletBlocked
 from .safety import Grant, Scope, assess, grant_for, lane_of, redact_for_speech
 from .tasks import LaneError, TaskManager, parse_task_command, resolve_lane_words
 from .speech import SpeechComposer
@@ -274,6 +277,7 @@ class Orchestrator:
         self._hf_resume = False          # push-to-talk suspended the stream; restart after
         self._speech_ended_at = 0.0      # echo guard: don't listen right after Barnaby speaks
         self._cancel_requested = False
+        self._notices: list[str] = []
         # Last-known component status, replayed in `hello`: load events fire at
         # startup, usually before any UI has connected to receive them.
         self._components: dict[str, dict[str, Any]] = {
@@ -282,6 +286,10 @@ class Orchestrator:
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        damaged = getattr(self.store, "recovered_to", None)
+        if damaged:
+            self._notices.append(f"Your history database was damaged, so Barnaby started a fresh one. "
+                                 f"The old file is kept at {damaged}.")
         self._speech_task = asyncio.create_task(self._speech_worker())
         self.tasks.load()
         self._refresh_project_terms()
@@ -304,6 +312,11 @@ class Orchestrator:
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components,
                   tasks=self.tasks.snapshot())
+
+    def take_notices(self) -> list[str]:
+        """Startup notices (e.g. a repaired database) to show once, to the first window that connects."""
+        notices, self._notices = self._notices, []
+        return notices
 
     def engines(self) -> list[dict[str, Any]]:
         out = []
@@ -792,9 +805,15 @@ class Orchestrator:
     def _persist(self, user_text: str, assistant_text: str, tools: list[dict[str, Any]],
                  status: str, cost: float | None) -> None:
         if self.session_id:
-            self.store.add_turn(self.session_id, user_text=user_text, assistant_text=assistant_text,
-                                tools=tools, status=status, cost_usd=cost)
-            asyncio.ensure_future(self.emit(ev("sessions", items=self.store.list_sessions())))
+            try:
+                self.store.add_turn(self.session_id, user_text=user_text, assistant_text=assistant_text,
+                                    tools=tools, status=status, cost_usd=cost)
+                asyncio.ensure_future(self.emit(ev("sessions", items=self.store.list_sessions())))
+            except sqlite3.Error:
+                # History is secondary: a failed save must never leave the turn (and the UI) stuck.
+                log.exception("couldn't save the turn to history")
+                asyncio.ensure_future(self.emit(ev_error(
+                    "history", "This conversation couldn't be saved to history. Restart Barnaby to repair it.")))
 
     async def _cancel_turn(self) -> bool:
         task = self._turn_task
@@ -826,7 +845,14 @@ class Orchestrator:
     async def _open_approvals(self, turn_id: str, result: TurnResult) -> None:
         group = ApprovalGroup()
         busy = self.tasks.busy_lanes(self.config.workspace)
+        seen: set[str] = set()
         for denial in result.denials:
+            # Agents retry a blocked command; one card per distinct action is enough, since
+            # approving it grants exactly that action.
+            key = f"{denial.tool_name}\0{json.dumps(denial.tool_input, sort_keys=True, default=str)}"
+            if key in seen:
+                continue
+            seen.add(key)
             a = assess(denial.tool_name, denial.tool_input)
             summary = a.summary
             grant = grant_for(denial.tool_name, denial.tool_input)
@@ -1132,6 +1158,9 @@ class Orchestrator:
             try:
                 await tablet.start()
                 self._tablet = tablet
+            except TabletBlocked as exc:
+                self._tablet_error = f"Tablet access couldn't start: {exc}"
+                log.warning("tablet access is off: %s", exc)
             except OSError as exc:
                 in_use = getattr(exc, "errno", None) in (48, 98, 10048) or "in use" in str(exc).lower()
                 self._tablet_error = (f"Port {self.config.tablet_port} is already in use. Pick another port."

@@ -204,7 +204,6 @@ export type EngineEvent =
   | TaskApprovalEvent
   | { type: "task_approval_decided"; task_id: string; request_id: string; approved: boolean }
   // Voice feature events
-  | { type: "wake_word_detected"; timestamp: number }
   | { type: "continuous_mode_changed"; active: boolean }
   | { type: "draft_command"; action: "send" | "discard" }
   | { type: "command_chain_start"; chain_id: string; steps: string[]; name: string | null }
@@ -217,8 +216,7 @@ export type EngineEvent =
   // Workflow events
   | { type: "workflow_started"; workflow_id: string; workflow_name: string }
   | { type: "workflow_step_complete"; workflow_id: string; step_number: number; success: boolean }
-  | { type: "workflow_error"; workflow_id: string; error_message: string }
-  | { type: "macro_recorded"; macro_id: string; macro_name: string; step_count: number };
+  | { type: "workflow_error"; workflow_id: string; error_message: string };
 
 export type Command =
   | { type: "auth"; token: string }

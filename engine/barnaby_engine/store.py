@@ -6,6 +6,7 @@ a turn being written. All SQL is parameterized.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -80,12 +81,42 @@ CREATE TABLE IF NOT EXISTS voice_samples (
 
 class Store:
     def __init__(self, path: Path | str) -> None:
+        self.recovered_to: Path | None = None  # where a damaged database was set aside, if one was
+        path = Path(path)
+        try:
+            self._open(path)
+        except sqlite3.DatabaseError:
+            self.recovered_to = self._set_aside(path)
+            self._open(path)
+
+    def _open(self, path: Path) -> None:
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
-        with self._lock:
-            self._conn.executescript(SCHEMA)
-            self._migrate()
+        try:
+            with self._lock:
+                # A truncated or torn file opens fine and only fails on the first write, mid-conversation.
+                if self._conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise sqlite3.DatabaseError("database disk image is malformed")
+                self._conn.executescript(SCHEMA)
+                self._migrate()
+        except sqlite3.DatabaseError:
+            self._conn.close()  # Windows won't let us move a file that is still open
+            raise
+
+    @staticmethod
+    def _set_aside(path: Path) -> Path:
+        """Move a damaged database (and its WAL files) out of the way, keeping it for recovery."""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        target = path.with_name(f"{path.name}.damaged-{stamp}")
+        for suffix in ("", "-wal", "-shm"):
+            src = path.with_name(path.name + suffix)
+            if src.exists():
+                try:
+                    os.replace(src, target.with_name(target.name + suffix))
+                except OSError:
+                    src.unlink(missing_ok=True)
+        return target
 
     def _migrate(self) -> None:
         # v1.1: sessions are bound to the agent engine that created them

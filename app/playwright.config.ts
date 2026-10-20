@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// E2E runs the real engine process in --mock mode (scripted agent, fake audio)
-// against the production UI build. No mic, no models, no API spend.
+// E2E runs the real engine process with the test-only harness (tests/e2e_engine.py: scripted
+// agent, fake audio) against the production UI build. No mic, no models, no API spend.
 const TOKEN = "e2e-token-0123456789abcdefghijklmnopqrstuv";
 const ENGINE_PORT = 8765;
 const PY = process.env.PYTHON ?? (process.platform === "win32" ? "python" : "python3");
@@ -44,7 +44,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `${PY} -m barnaby_engine --mock --port ${ENGINE_PORT}`,
+      command: `${PY} -m tests.e2e_engine --port ${ENGINE_PORT}`,
       cwd: "../engine",
       env: { BARNABY_TOKEN: TOKEN, BARNABY_DATA_DIR: DATA_DIR },
       // HTTP readiness check: the engine answers plain GETs with 200. A bare `port`

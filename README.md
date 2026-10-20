@@ -212,10 +212,12 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 443 tests
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 441 tests
 cd app;    npm run typecheck; npm test                                   # 111 tests
-.\scripts\e2e.ps1                     # 12 E2E flows against the real engine in --mock mode
+.\scripts\e2e.ps1                     # 12 E2E flows: real engine process, scripted agent and fake audio (tests/e2e_engine.py)
 ```
+
+The scripted agent and fake audio live only under `engine/tests/`. The shipped engine has no mock mode: it always uses the microphone, Whisper, Kokoro and your real `claude` / `agent` / Devin.
 
 The engine suite drives the real subprocess path with a fake `claude` executable. It checks that the prompt arrives on stdin and not in argv, that the settings file is scoped and deleted, that tree-kill works on cancel, that 200 KB stream lines are handled, and that a missing result surfaces stderr. The stream parser is pinned to a fixture captured from real `claude -p --output-format stream-json` output. CI runs all of it on Windows and Ubuntu (`.github/workflows/ci.yml`).
 
@@ -233,7 +235,7 @@ With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `s
 
 **Written for Windows, first exercised on your machine:** `taskkill /T` tree-kill, `CREATE_NO_WINDOW`, WASAPI sample-rate fallback, `.cmd` launcher handling, and live Whisper/Kokoro inference.
 
-**Planned, not built yet** (see `docs/superpowers/specs/2025-09-27-barnaby-premier-tier-design.md`). The engine has placeholder modules for the first two (`wake_word.py`, `macro_recorder.py`), but neither is connected to the microphone or the UI. Their toggles are hidden until they work.
+**Planned, not built yet** (see `docs/superpowers/specs/2025-09-27-barnaby-premier-tier-design.md`). Nothing for these ships in the engine until it works:
 - Wake word ("Barnaby" to start listening): needs a real on-device model such as openWakeWord.
 - Macro recording and replay.
 - IDE extensions for VS Code, Cursor and Claude Desktop: the engine side, the secured bridge, is ready. The extensions themselves aren't written.

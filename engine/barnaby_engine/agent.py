@@ -114,6 +114,10 @@ def _preview(content: Any, limit: int = 600) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+SIGN_IN_HINT = ("\n\nClaude Code needs you to sign in again. Open a terminal, run `claude`, then type /login. "
+                "If you set CLAUDE_CODE_OAUTH_TOKEN, replace it with a fresh `claude setup-token` or remove it.")
+
+
 class StreamParser:
     """Turns stream-json objects into AgentEvents.
 
@@ -184,10 +188,14 @@ class StreamParser:
                 Denial(str(d.get("tool_use_id", "")), str(d.get("tool_name", "")), dict(d.get("tool_input") or {}))
                 for d in obj.get("permission_denials") or [] if isinstance(d, dict)
             )
+            text = str(obj.get("result") or "")
+            is_error = bool(obj.get("is_error")) or obj.get("subtype") != "success"
+            if is_error and (obj.get("api_error_status") == 401 or "authenticate" in text.lower()):
+                text += SIGN_IN_HINT
             out.append(TurnResult(
-                text=str(obj.get("result") or ""),
+                text=text,
                 session_id=obj.get("session_id"),
-                is_error=bool(obj.get("is_error")) or obj.get("subtype") != "success",
+                is_error=is_error,
                 cost_usd=obj.get("total_cost_usd"),
                 duration_ms=obj.get("duration_ms"),
                 denials=denials,

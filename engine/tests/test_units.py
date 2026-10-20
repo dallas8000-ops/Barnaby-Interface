@@ -147,6 +147,40 @@ class StoreTest(unittest.TestCase):
         finally:
             store.close()
 
+    def test_damaged_database_is_set_aside_and_replaced(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "s.db"
+            store = Store(path)
+            for i in range(40):
+                sid = store.create_session("/w")
+                store.add_turn(sid, user_text="u" * 500, assistant_text="a" * 500, tools=[], status="ok", cost_usd=None)
+            store.close()
+            data = bytearray(path.read_bytes())
+            self.assertGreater(len(data), 3 * 4096)
+            data[2 * 4096:3 * 4096] = b"\xff" * 4096  # tear a page in the middle of the file
+            path.write_bytes(bytes(data))
+            for wal in (Path(d) / "s.db-wal", Path(d) / "s.db-shm"):
+                wal.unlink(missing_ok=True)
+
+            store = Store(path)
+            try:
+                self.assertIsNotNone(store.recovered_to)
+                self.assertTrue(store.recovered_to.exists())  # the damaged file is kept for recovery
+                self.assertEqual(store.list_sessions(), [])
+                sid = store.create_session("/w")
+                store.add_turn(sid, user_text="u", assistant_text="a", tools=[], status="ok", cost_usd=None)
+                self.assertEqual(store.list_sessions()[0]["turn_count"], 1)
+            finally:
+                store.close()
+
+    def test_healthy_database_is_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "s.db")
+            store.close()
+            store = Store(Path(d) / "s.db")
+            self.assertIsNone(store.recovered_to)
+            store.close()
+
     def test_sessions_and_turns(self):
         with tempfile.TemporaryDirectory() as d:
             store = Store(Path(d) / "s.db")

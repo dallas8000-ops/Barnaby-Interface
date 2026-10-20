@@ -7,11 +7,6 @@ class TestConfigValidation(unittest.TestCase):
         errors = validate_config(config)
         self.assertEqual(errors, [])
     
-    def test_invalid_wake_word_sensitivity(self):
-        config = Config(wake_word_sensitivity=1.5)
-        errors = validate_config(config)
-        self.assertIn("wake_word_sensitivity", errors[0])
-    
     def test_invalid_continuous_timeout(self):
         config = Config(continuous_mode_timeout=0.1)
         errors = validate_config(config)

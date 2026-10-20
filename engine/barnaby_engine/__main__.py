@@ -1,4 +1,4 @@
-"""Entry point: ``python -m barnaby_engine [--mock] [--dev]``.
+"""Entry point: ``python -m barnaby_engine [--dev]``.
 
 Contract with the Tauri shell:
 * token arrives in env ``BARNABY_TOKEN`` (never argv: argv is visible to every
@@ -19,7 +19,9 @@ import shutil
 import signal
 import sys
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 from logging.handlers import RotatingFileHandler
 
 from . import __version__
@@ -27,18 +29,13 @@ from .adaptive import VoiceProfile
 from .agent import AgentError, ClaudeCodeAgent, resolve_claude
 from .cursor_agent import CursorAgent, resolve_cursor
 from .devin_agent import DevinAgent, DevinClient
-from .vault import MemoryCredentials, Vault, VaultError
+from .vault import Vault, VaultError
 from .remote import RemoteServer
 from .config import resolve_workflows_dir, Config, data_dir
 from .orchestrator import Orchestrator
 from .server import Bridge, allowed_origins_from_env
 from .store import Store
-from .wake_word import WakeWordDetector
-from .continuous import ContinuousMode
-from .command_chain import CommandChain
-from .ide_bridge import IdeBridge
 from .workflows import WorkflowEngine
-from .macro_recorder import MacroRecorder
 from .templates import TemplateManager
 
 
@@ -72,7 +69,73 @@ def _watch_stdin(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> None:
     threading.Thread(target=run, name="stdin-watch", daemon=True).start()
 
 
-async def amain(args: argparse.Namespace) -> None:
+@dataclass
+class Backends:
+    """Everything the engine talks to outside itself: microphone, speech models, agents, credentials."""
+    recorder: Any
+    transcriber: Any
+    speaker: Any
+    agents: dict[str, Any]
+    vault: Vault
+    available: Callable[[str], str | None]
+    task_factory: Callable[[str, str], Any]
+    transcriber_factory: Callable[[Config], Any] | None = None
+    speaker_factory: Callable[[Config], Any] | None = None
+    tablet_kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+def real_backends(config: Config) -> Backends:
+    from .voice import KokoroSpeaker, MicRecorder, WhisperTranscriber
+    vault = Vault()
+
+    def devin_key() -> str | None:
+        try:
+            return vault.get("devin")
+        except VaultError as exc:
+            log.warning("%s", exc)
+            return None
+
+    def tfactory(c: Config) -> WhisperTranscriber:
+        return WhisperTranscriber(c.whisper_model, c.whisper_device)
+
+    def sfactory(c: Config) -> KokoroSpeaker:
+        return KokoroSpeaker(c.tts_voice, c.tts_speed)
+
+    def available(name: str) -> str | None:
+        try:
+            if name == "claude":
+                resolve_claude(config.claude_bin)
+            elif name == "cursor":
+                resolve_cursor(config.cursor_bin)
+            elif name == "devin" and not vault.has("devin"):
+                return DEVIN_NEEDS_KEY
+        except AgentError as exc:
+            return str(exc)
+        return None
+
+    return Backends(
+        recorder=MicRecorder(config.input_device),
+        transcriber=tfactory(config),
+        speaker=sfactory(config),
+        agents={
+            "claude": ClaudeCodeAgent(claude_bin=config.claude_bin, model=config.claude_model,
+                                      safe_bash=config.safe_bash, timeout_s=config.turn_timeout_s,
+                                      scratch_dir=data_dir() / "run"),
+            "cursor": CursorAgent(config_dir=data_dir() / "cursor", cursor_bin=config.cursor_bin,
+                                  model=config.cursor_model, safe_bash=config.safe_bash,
+                                  timeout_s=config.turn_timeout_s, scratch_dir=data_dir() / "run"),
+            "devin": DevinAgent(DevinClient(devin_key)),
+        },
+        vault=vault,
+        available=available,
+        task_factory=make_task_factory(config, devin_key, data_dir()),
+        transcriber_factory=tfactory,
+        speaker_factory=sfactory,
+    )
+
+
+async def amain(args: argparse.Namespace,
+                make_backends: Callable[[Config], Backends] = real_backends) -> None:
     token = os.environ.get("BARNABY_TOKEN") or ""
     if not token:
         if not args.dev:
@@ -85,98 +148,27 @@ async def amain(args: argparse.Namespace) -> None:
     store = Store(data_dir() / "barnaby.db")
     profile = VoiceProfile(store)
     bridge = Bridge(token, allowed_origins_from_env())
-    
-    # Initialize new subsystems
-    wake_word_detector = WakeWordDetector(
-        keyword=config.wake_word_keyword,
-        sensitivity=config.wake_word_sensitivity,
-    )
-    
-    continuous_mode = ContinuousMode(timeout=config.continuous_mode_timeout)
-    
-    command_chain = CommandChain(max_depth=config.command_chain_max_depth)
-    
-    ide_bridge = IdeBridge(port=config.ide_bridge_port)
-    
     workflow_engine = WorkflowEngine(workflows_dir=str(resolve_workflows_dir(config.workflows_directory)))
-    
-    macro_recorder = MacroRecorder()
-    
     template_manager = TemplateManager()
+    be = make_backends(config)
 
-    if args.mock:
-        from .mock import (FakeRecorder, FakeSpeaker, FakeTranscriber, ScriptedAgent, devin_demo_script,
-                           task_demo_script)
-        recorder, transcriber, speaker = FakeRecorder(), FakeTranscriber(), FakeSpeaker(delay=0.4)
-        vault = Vault(MemoryCredentials())  # never touch the real Credential Manager in mock runs
-        agents = {"claude": ScriptedAgent(step_delay=0.35), "cursor": ScriptedAgent(step_delay=0.35),
-                  "devin": ScriptedAgent(step_delay=0.35, default=devin_demo_script)}
-
-        def task_factory(engine: str, task_id: str):
-            return ScriptedAgent(step_delay=0.6, default=task_demo_script)
-
-        def available(name: str) -> str | None:
-            return DEVIN_NEEDS_KEY if name == "devin" and not vault.has("devin") else None
-        tfactory = sfactory = None
-        if not config.workspace:
-            config.workspace = str(data_dir())
-    else:
-        from .voice import KokoroSpeaker, MicRecorder, WhisperTranscriber
-        vault = Vault()
-
-        def devin_key() -> str | None:
-            try:
-                return vault.get("devin")
-            except VaultError as exc:
-                log.warning("%s", exc)
-                return None
-        recorder = MicRecorder(config.input_device)
-        tfactory = lambda c: WhisperTranscriber(c.whisper_model, c.whisper_device)  # noqa: E731
-        sfactory = lambda c: KokoroSpeaker(c.tts_voice, c.tts_speed)  # noqa: E731
-        transcriber, speaker = tfactory(config), sfactory(config)
-        agents = {
-            "claude": ClaudeCodeAgent(claude_bin=config.claude_bin, model=config.claude_model,
-                                      safe_bash=config.safe_bash, timeout_s=config.turn_timeout_s,
-                                      scratch_dir=data_dir() / "run"),
-            "cursor": CursorAgent(config_dir=data_dir() / "cursor", cursor_bin=config.cursor_bin,
-                                  model=config.cursor_model, safe_bash=config.safe_bash,
-                                  timeout_s=config.turn_timeout_s, scratch_dir=data_dir() / "run"),
-            "devin": DevinAgent(DevinClient(devin_key)),
-        }
-
-        task_factory = make_task_factory(config, devin_key, data_dir())
-
-        def available(name: str) -> str | None:
-            try:
-                if name == "claude":
-                    resolve_claude(config.claude_bin)
-                elif name == "cursor":
-                    resolve_cursor(config.cursor_bin)
-                elif name == "devin" and not vault.has("devin"):
-                    return DEVIN_NEEDS_KEY
-            except AgentError as exc:
-                return str(exc)
-            return None
-
-    orch = Orchestrator(config=config, store=store, profile=profile, recorder=recorder,
-                        transcriber=transcriber, speaker=speaker, agents=agents, engine_available=available,
-                        templates=template_manager, workflows=workflow_engine,
+    orch = Orchestrator(config=config, store=store, profile=profile, recorder=be.recorder,
+                        transcriber=be.transcriber, speaker=be.speaker, agents=be.agents,
+                        engine_available=be.available, templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
-                        transcriber_factory=tfactory, speaker_factory=sfactory, vault=vault,
-                        emit_desktop=bridge.emit_desktop,
-                        task_agent_factory=task_factory,
+                        transcriber_factory=be.transcriber_factory, speaker_factory=be.speaker_factory,
+                        vault=be.vault, emit_desktop=bridge.emit_desktop,
+                        task_agent_factory=be.task_factory,
                         task_forget=lambda tid: shutil.rmtree(data_dir() / "cursor-tasks" / tid, ignore_errors=True),
                         tablet_factory=lambda port, on_change: RemoteServer(
                             bridge, data_dir=data_dir() / "tablet", port=port, on_change=on_change,
-                            # --mock (UI dev / E2E) runs a scripted agent; don't depend on the
-                            # test machine's Windows network category.
-                            **({"network_check": lambda: None} if args.mock else {})))
+                            **be.tablet_kwargs))
     bridge.orchestrator = orch
 
     server = await bridge.serve(port=args.port)
     port = server.sockets[0].getsockname()[1]
     await orch.start()
-    print(json.dumps({"event": "ready", "port": port, "version": __version__, "mock": args.mock}), flush=True)
+    print(json.dumps({"event": "ready", "port": port, "version": __version__}), flush=True)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -213,12 +205,15 @@ def make_task_factory(config: Config, devin_key, base: Path):
     return factory
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="barnaby-engine")
-    parser.add_argument("--mock", action="store_true", help="scripted agent + fake audio (UI dev / E2E)")
     parser.add_argument("--dev", action="store_true", help="generate and print a token if none is provided")
     parser.add_argument("--port", type=int, default=0)
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    args = parse_args()
     _setup_logging()
     try:
         asyncio.run(amain(args))

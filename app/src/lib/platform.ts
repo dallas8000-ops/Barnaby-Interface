@@ -6,7 +6,7 @@ export const isTauri = (): boolean =>
 
 /**
  * Desktop: the Rust shell spawned the engine and holds port + token; ask it.
- * Browser (dev / E2E against `python -m barnaby_engine --mock --dev`): take
+ * Browser (dev / E2E against `python -m barnaby_engine --dev`): take
  * them from the URL or Vite env. The URL-token path is dev-only by design.
  */
 export async function resolveEndpoint(): Promise<EngineEndpoint> {

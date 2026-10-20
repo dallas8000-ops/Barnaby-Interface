@@ -68,11 +68,6 @@ class Config:
     task_timeout_s: int = 3600
     task_lanes: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     
-    # Wake word settings
-    wake_word_enabled: bool = False
-    wake_word_keyword: str = "Barnaby"
-    wake_word_sensitivity: float = 0.5  # 0.0 to 1.0
-    
     # Continuous mode settings
     continuous_mode_enabled: bool = False
     continuous_mode_timeout: float = 1.2  # seconds of silence that end a hands-free utterance
@@ -88,7 +83,6 @@ class Config:
     # Workflow settings
     workflows_enabled: bool = True
     workflows_directory: str = ""        # empty = <data dir>/workflows; see resolve_workflows_dir()
-    macro_recording_enabled: bool = True
 
     # Keys the UI is allowed to change. safe_bash is deliberately excluded:
     # widening the auto-approve list must be a conscious edit of config.json,
@@ -154,9 +148,6 @@ def resolve_workflows_dir(configured: str) -> Path:
 def validate_config(config: Config) -> list[str]:
     """Validate configuration and return list of error messages."""
     errors = []
-    
-    if not 0.0 <= config.wake_word_sensitivity <= 1.0:
-        errors.append("wake_word_sensitivity must be between 0.0 and 1.0")
     
     if config.continuous_mode_timeout < 0.5:
         errors.append("continuous_mode_timeout must be at least 0.5 seconds")
