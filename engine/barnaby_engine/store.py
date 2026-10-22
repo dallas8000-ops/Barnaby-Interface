@@ -124,6 +124,23 @@ class Store:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sessions)").fetchall()}
         if "engine" not in cols:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN engine TEXT NOT NULL DEFAULT 'claude'")
+        # v1.3: task verification (checks Barnaby runs) and per-task git worktrees.
+        # Older rows get no checks and isolation "" (they stay in the shared project folder).
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        for name, decl in self._TASK_COLUMNS:
+            if name not in cols:
+                self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {decl}")
+
+    _TASK_COLUMNS = (
+        ("checks_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("check_results_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("verification", "TEXT NOT NULL DEFAULT ''"),
+        ("isolation", "TEXT NOT NULL DEFAULT ''"),
+        ("worktree", "TEXT NOT NULL DEFAULT ''"),
+        ("branch", "TEXT NOT NULL DEFAULT ''"),
+        ("notice", "TEXT NOT NULL DEFAULT ''"),
+    )
 
     def close(self) -> None:
         with self._lock:
@@ -227,32 +244,42 @@ class Store:
     MAX_RESULT_CHARS = 20_000
 
     def save_task(self, t: Any) -> None:
-        """Insert or update a tasks.TaskRecord (the pending prompt is not persisted)."""
+        """Insert or update a tasks.TaskRecord (the pending prompt, warning and run folder
+        are not persisted)."""
         self._exec(
             "INSERT INTO tasks (id, workspace, engine, title, instruction, lanes_json, status, created_at,"
-            " started_at, finished_at, summary, result_text, error, cost_usd, cli_session_id, turns)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            " started_at, finished_at, summary, result_text, error, cost_usd, cli_session_id, turns,"
+            " checks_json, attempts, check_results_json, verification, isolation, worktree, branch, notice)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(id) DO UPDATE SET title=excluded.title, instruction=excluded.instruction,"
             " lanes_json=excluded.lanes_json, status=excluded.status, started_at=excluded.started_at,"
             " finished_at=excluded.finished_at, summary=excluded.summary, result_text=excluded.result_text,"
             " error=excluded.error, cost_usd=excluded.cost_usd, cli_session_id=excluded.cli_session_id,"
-            " turns=excluded.turns",
+            " turns=excluded.turns, checks_json=excluded.checks_json, attempts=excluded.attempts,"
+            " check_results_json=excluded.check_results_json, verification=excluded.verification,"
+            " isolation=excluded.isolation, worktree=excluded.worktree, branch=excluded.branch,"
+            " notice=excluded.notice",
             (t.id, t.workspace, t.engine, t.title, t.instruction, json.dumps(list(t.lanes)), t.status,
              t.created_at, t.started_at, t.finished_at, t.summary, t.result_text[: self.MAX_RESULT_CHARS],
-             t.error, t.cost_usd, t.cli_session_id, t.turns))
+             t.error[: self.MAX_RESULT_CHARS], t.cost_usd, t.cli_session_id, t.turns,
+             json.dumps([{"run": c.run, "dir": c.dir} for c in t.checks]), t.attempts,
+             json.dumps(list(t.check_results)), t.verification, t.isolation, t.worktree, t.branch, t.notice))
 
     def list_tasks(self, limit: int = 100) -> list[Any]:
+        from .checks import specs_from
         from .tasks import TaskRecord
         rows = self._rows("SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,))
         out = []
         for r in rows:
             lanes = tuple(json.loads(r.pop("lanes_json") or "[]"))
-            out.append(TaskRecord(lanes=lanes, **r))
+            checks = specs_from(json.loads(r.pop("checks_json", None) or "[]"))
+            results = json.loads(r.pop("check_results_json", None) or "[]")
+            out.append(TaskRecord(lanes=lanes, checks=checks, check_results=results, **r))
         return out
 
     def interrupt_active_tasks(self) -> int:
         cur = self._exec("UPDATE tasks SET status='interrupted', finished_at=COALESCE(finished_at, ?)"
-                         " WHERE status IN ('queued','running','needs_approval')", (time.time(),))
+                         " WHERE status IN ('queued','running','verifying','needs_approval')", (time.time(),))
         return cur.rowcount
 
     def delete_tasks(self, ids: list[str]) -> None:
