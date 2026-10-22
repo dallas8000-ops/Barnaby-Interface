@@ -277,15 +277,18 @@ if __name__ == "__main__":
 
 
 class ReviewRegressionOrchestratorTest(_OrchBase):
-    async def test_remote_cannot_open_a_session_from_another_project(self):
-        # F3: remote load_session switched config.workspace.
+    async def test_remote_opens_sessions_of_projects_the_pc_opened_but_names_no_new_folder(self):
+        # F3 (revised for tablet parity): opening a session may switch to its project, which
+        # the PC opened when the session was made. Naming any other folder stays refused.
         await self.build()
         other = tempfile.mkdtemp()
         foreign = self.store.create_session(other, "claude")
         local = self.store.create_session(self.config.workspace, "claude")
-        self.assertIn("PC", self.orch.remote_check(cmd("load_session", session_id=foreign)))
+        self.assertIsNone(self.orch.remote_check(cmd("load_session", session_id=foreign)))
         self.assertIsNone(self.orch.remote_check(cmd("load_session", session_id=local)))
         self.assertIsNone(self.orch.remote_check(cmd("ping")))
+        stranger = tempfile.mkdtemp()
+        self.assertIn("PC", self.orch.remote_check(cmd("select_project", workspace=stranger)))
 
     async def test_two_clips_at_once_transcribe_one_at_a_time(self):
         # F7c: busy check and _transcribing were separated by an await.

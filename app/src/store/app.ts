@@ -12,6 +12,10 @@ import type {
   ClientRole,
   TabletStatus,
   EngineState,
+  ApprovalRequiredEvent,
+  LiveSnapshot,
+  ProjectInfo,
+  RecentEvent,
   Risk,
   SessionSummary,
   StoredTurn,
@@ -93,6 +97,12 @@ export interface AppState {
   tabletRecording: boolean;
   tabletSpeaking: boolean;
   sessions: SessionSummary[];
+  /** Sessions of one project, fetched when browsing it (beyond the recent list). */
+  projectSessions: Record<string, SessionSummary[]>;
+  /** Projects the PC has opened; any device may switch between them. */
+  projects: ProjectInfo[];
+  /** Newest notification this device has seen, so a reconnect shows only what it missed. */
+  lastNid: number;
   sessionId: string | null;
   turns: Turn[];
   draft: { id: string; heard: string; text: string } | null;
@@ -144,6 +154,9 @@ export const initialState: AppState = {
   tabletRecording: false,
   tabletSpeaking: false,
   sessions: [],
+  projectSessions: {},
+  projects: [],
+  lastNid: 0,
   sessionId: null,
   turns: [],
   draft: null,
@@ -232,6 +245,72 @@ function applySnapshot(
   };
 }
 
+const toApproval = (e: ApprovalRequiredEvent): Approval => ({
+  requestId: e.request_id,
+  toolName: e.tool_name,
+  summary: e.summary,
+  detail: e.detail,
+  risk: e.risk,
+  voiceApprovable: e.voice_approvable,
+  grantable: e.grantable,
+  decided: null,
+});
+
+/** On a first connect, older notifications than this are history, not news. */
+const FRESH_RECENT_S = 600;
+
+function recentToasts(s: AppState, recent: RecentEvent[]): { toasts: Toast[]; lastNid: number } {
+  let toasts = s.toasts;
+  let lastNid = s.lastNid;
+  for (const r of recent) {
+    if (r.nid <= s.lastNid || (s.lastNid === 0 && r.age_s > FRESH_RECENT_S)) continue;
+    lastNid = Math.max(lastNid, r.nid);
+    if (r.type === "notice") toasts = toast({ ...s, toasts }, "info", r.message);
+    else if (r.type === "error") toasts = toast({ ...s, toasts }, "error", r.message);
+    else toasts = toast({ ...s, toasts }, r.status === "done" ? "info" : "error", taskDoneMessage(r));
+  }
+  return { toasts, lastNid: Math.max(lastNid, ...recent.map((r) => r.nid)) };
+}
+
+const taskDoneMessage = (e: { engine: string; title: string; status: string; summary: string; error: string }) => {
+  const who = ENGINE_NAME[e.engine] ?? e.engine;
+  return e.status === "done"
+    ? `${who} finished ${e.title}.${e.summary ? ` ${e.summary}` : ""}`
+    : `${who}'s task ${e.title} failed${e.error ? `: ${e.error}` : "."}`;
+};
+
+/** The engine's snapshot is the truth: conversation, the turn in flight, open cards, chain,
+ *  draft and task activity are rebuilt from it, so nothing missed while away is lost. */
+function applyLive(s: AppState, live: LiveSnapshot, sessionId: string | null): AppState {
+  const stored = live.session ? live.session.turns.map((t) => fromStored(t, live.session?.engine)) : [];
+  const turn = live.turn;
+  const turns: Turn[] = turn
+    ? [...stored, { id: turn.turn_id, text: turn.text, system: turn.system, engine: turn.engine, assistant: turn.assistant,
+        tools: turn.tools.map((x) => ({ ...x })), status: "running" }]
+    : stored;
+  const taskText = { ...s.taskText };
+  const taskActivity = { ...s.taskActivity };
+  for (const [id, v] of Object.entries(live.task_live)) {
+    if (v.text) taskText[id] = v.text;
+    if (v.tool) taskActivity[id] = { tool: v.tool, path: v.path ?? null };
+  }
+  const { toasts, lastNid } = recentToasts(s, live.recent);
+  return {
+    ...s,
+    sessionId,
+    turns,
+    approvals: live.approvals.map(toApproval),
+    chain: live.chain ? { id: live.chain.chain_id, name: live.chain.name, steps: live.chain.steps, index: live.chain.index } : null,
+    draft: live.draft ? { id: live.draft.draft_id, heard: live.draft.heard, text: live.draft.text } : null,
+    taskText,
+    taskActivity,
+    toasts,
+    lastNid,
+  };
+}
+
+const seen = (s: AppState, nid: number | undefined) => (nid ? Math.max(s.lastNid, nid) : s.lastNid);
+
 const updateTurn = (turns: Turn[], id: string, fn: (t: Turn) => Turn): Turn[] =>
   turns.map((t) => (t.id === id ? fn(t) : t));
 
@@ -239,7 +318,8 @@ const updateTurn = (turns: Turn[], id: string, fn: (t: Turn) => Turn): Turn[] =>
 export function reduceEvent(s: AppState, e: EngineEvent): AppState {
   switch (e.type) {
     case "hello": {
-      const base = e.tasks ? applySnapshot(s, e.tasks) : s;
+      const tasks = e.tasks ? applySnapshot(s, e.tasks) : s;
+      const base = e.live ? applyLive(tasks, e.live, e.session_id) : tasks;
       return {
         ...base,
         engineState: e.state,
@@ -253,6 +333,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         tablet: e.tablet ?? s.tablet,
         pairError: null,
         sessions: e.sessions,
+        projects: e.projects ?? s.projects,
         speaking: e.speaking,
         components: e.components ?? s.components,
       };
@@ -277,12 +358,8 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
     case "task_activity":
       return { ...s, taskActivity: { ...s.taskActivity, [e.task_id]: { tool: e.tool, path: e.path } } };
     case "task_done": {
-      const who = ENGINE_NAME[e.engine] ?? e.engine;
-      const toasts =
-        e.status === "done"
-          ? toast(s, "info", `${who} finished ${e.title}.${e.summary ? ` ${e.summary}` : ""}`)
-          : toast(s, "error", `${who}'s task ${e.title} failed${e.error ? `: ${e.error}` : "."}`);
-      return { ...s, toasts, taskAttention: s.taskAttention + 1 };
+      const toasts = toast(s, e.status === "done" ? "info" : "error", taskDoneMessage(e));
+      return { ...s, toasts, taskAttention: s.taskAttention + 1, lastNid: seen(s, e.nid) };
     }
     case "task_approval_required":
       if (s.taskApprovals.some((a) => a.requestId === e.request_id)) return s;
@@ -340,22 +417,8 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         })),
       };
     case "approval_required":
-      return {
-        ...s,
-        approvals: [
-          ...s.approvals,
-          {
-            requestId: e.request_id,
-            toolName: e.tool_name,
-            summary: e.summary,
-            detail: e.detail,
-            risk: e.risk,
-            voiceApprovable: e.voice_approvable,
-            grantable: e.grantable,
-            decided: null,
-          },
-        ],
-      };
+      if (s.approvals.some((a) => a.requestId === e.request_id)) return s;
+      return { ...s, approvals: [...s.approvals, toApproval(e)] };
     case "approval_decided": {
       const approvals = s.approvals.map((a) => (a.requestId === e.request_id ? { ...a, decided: e.approved } : a));
       return { ...s, approvals: approvals.every((a) => a.decided !== null) ? [] : approvals };
@@ -363,7 +426,13 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
     case "approvals_cleared":
       return { ...s, approvals: [] };
     case "sessions":
-      return { ...s, sessions: e.items };
+      return e.workspace !== undefined
+        ? { ...s, projectSessions: { ...s.projectSessions, [e.workspace]: e.items } }
+        : { ...s, sessions: e.items };
+    case "projects":
+      return { ...s, projects: e.items };
+    case "draft_closed":
+      return s.draft?.id === e.draft_id ? { ...s, draft: null } : s;
     case "session_loaded":
       return {
         ...s,
@@ -408,9 +477,9 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
     case "engines":
       return { ...s, engines: e.items };
     case "notice":
-      return { ...s, toasts: toast(s, "info", e.message) };
+      return { ...s, toasts: toast(s, "info", e.message), lastNid: seen(s, e.nid) };
     case "error":
-      return { ...s, toasts: toast(s, "error", e.message) };
+      return { ...s, toasts: toast(s, "error", e.message), lastNid: seen(s, e.nid) };
     case "pong":
       return s;
     // Voice feature events

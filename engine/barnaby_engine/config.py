@@ -44,6 +44,9 @@ def data_dir() -> Path:
 @dataclass
 class Config:
     workspace: str = ""                  # project folder the agent works in
+    # Project folders opened on the PC, newest first. Engine-maintained (not in UI_MUTABLE):
+    # a tablet may pick from these, but only the PC adds to them by choosing a folder.
+    recent_projects: list[str] = field(default_factory=list)
     claude_bin: str = ""                 # override path to claude executable
     claude_model: str = ""               # e.g. "opus", "sonnet"; empty = CLI default
     engine: str = "claude"               # which coding agent runs turns: claude | cursor | devin

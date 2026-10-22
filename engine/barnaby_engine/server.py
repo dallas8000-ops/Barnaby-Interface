@@ -17,6 +17,12 @@ Two kinds of client share one hub:
   per device (newer replaces older), at most ``MAX_REMOTE_CLIENTS`` in total.
 
 Every event is broadcast to all clients; ``hello`` goes only to the newcomer.
+``hello`` is a full snapshot (conversation, live turn, pending approvals, tasks,
+projects) and is built and queued with no ``await`` between registering the
+client and sending it, so a client gets the snapshot and then every later event:
+nothing falls in the gap. ``resync`` re-sends it to the asking client only (a
+tablet waking up). Replies meant only for the client that sent a command (e.g.
+"that approval was already decided on another device") go through :func:`reply`.
 Every inbound frame is schema-validated (pydantic) and then checked against the
 client's role by :func:`permit` before dispatch. A tablet can do ordinary work
 (instructions, approvals, sessions) but can't change what the PC trusts: the
@@ -25,12 +31,13 @@ project folder, API keys, the microphone, tablet access itself.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hmac
 import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection, serve
@@ -61,6 +68,8 @@ REMOTE_COMMANDS = frozenset({
     "new_session", "load_session", "list_sessions", "set_config", "ping",
     "get_voice_profile", "list_templates", "run_template", "audio_clip",
     "task_create", "task_cancel", "task_follow_up", "task_clear", "task_list",
+    # Projects the PC has already opened: list them and pick one (the engine checks the pick).
+    "list_projects", "select_project", "resync",
 })
 REMOTE_CONFIG_KEYS = frozenset({"engine", "review_transcripts", "claude_model", "cursor_model"})
 REMOTE_ONLY = frozenset({"audio_clip"})  # the PC has its own microphone path
@@ -77,6 +86,18 @@ def permit(role: str, cmd: Command) -> str | None:
         if blocked:
             return f"Only the PC can change: {', '.join(blocked)}."
     return None
+
+
+# The client whose command is being handled, for replies only it should see.
+Send = Callable[[dict[str, Any]], Awaitable[None]]
+_sender: contextvars.ContextVar[Send | None] = contextvars.ContextVar("barnaby_sender", default=None)
+
+
+async def reply(event: dict[str, Any], fallback: Send) -> None:
+    """Send ``event`` to the client whose command is being handled; ``fallback`` (usually a
+    broadcast) when there is none, e.g. a command from the engine itself or a test."""
+    send = _sender.get()
+    await (send or fallback)(event)
 
 
 @dataclass(eq=False)
@@ -195,10 +216,7 @@ class Bridge:
         if info.role == "remote":
             self._notify_remote_count()
         try:
-            hello = await self.orchestrator.hello()
-            hello["protocol"] = PROTOCOL_VERSION
-            hello["role"] = info.role
-            await self._send(ws, info, hello)
+            await self._send(ws, info, await self._hello(info))
             take = getattr(self.orchestrator, "take_notices", None)
             if take is not None and info.role == "desktop":
                 for message in take():
@@ -211,6 +229,9 @@ class Bridge:
                     continue
                 if isinstance(cmd, Auth):
                     continue
+                if cmd.type == "resync":
+                    await self._send(ws, info, await self._hello(info))
+                    continue
                 reason = permit(info.role, cmd)
                 if reason is None and info.role == "remote":
                     check = getattr(self.orchestrator, "remote_check", None)
@@ -218,11 +239,14 @@ class Bridge:
                 if reason:
                     await self._send(ws, info, ev_error("not_allowed", reason))
                     continue
+                token = _sender.set(lambda event, ws=ws, info=info: self._send(ws, info, event))
                 try:
                     await self.orchestrator.handle(cmd)
                 except Exception as exc:  # noqa: BLE001 - one bad command must not drop the socket
                     log.exception("command failed: %s", cmd.type)
                     await self._send(ws, info, ev_error("internal", str(exc)))
+                finally:
+                    _sender.reset(token)
         except ConnectionClosed:
             pass
         finally:
@@ -234,6 +258,14 @@ class Bridge:
                     # Releasing the PC mic if the window vanished mid push-to-talk.
                     await self.orchestrator.handle(parse_command(json.dumps({"type": "cancel"})))
 
+    async def _hello(self, info: ClientInfo) -> dict[str, Any]:
+        # orchestrator.hello() must not await: the snapshot has to be taken in the same step
+        # as the client is registered (see the module docstring).
+        hello = await self.orchestrator.hello()
+        hello["protocol"] = PROTOCOL_VERSION
+        hello["role"] = info.role
+        return hello
+
     async def serve(self, host: str = "127.0.0.1", port: int = 0):
         return await serve(self._handler, host, port, process_request=self._process_request,
                            max_size=MAX_FRAME, ping_interval=20, ping_timeout=20)
@@ -244,4 +276,4 @@ def allowed_origins_from_env() -> frozenset[str]:
     return DEFAULT_ORIGINS | extra
 
 
-__all__ = ["Bridge", "ClientInfo", "permit", "allowed_origins_from_env", "ev"]
+__all__ = ["Bridge", "ClientInfo", "permit", "reply", "allowed_origins_from_env", "ev"]

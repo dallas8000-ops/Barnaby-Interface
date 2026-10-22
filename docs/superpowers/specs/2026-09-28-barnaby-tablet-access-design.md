@@ -51,8 +51,9 @@ captures the user's voice and shows and speaks the results.
    - AC5.2 **Stop speaking** on the tablet silences it.
 6. **Approve from the tablet.** Approval cards work on the tablet with the same rules as on the PC.
    Critical commands have no voice approval and need a hold to confirm.
-7. **The tablet can't widen its own access.** Remote clients cannot change the project folder,
+7. **The tablet can't widen its own access.** Remote clients cannot choose a new project folder,
    API keys, the microphone, hands-free, tablet access or pairing, or open an editor on the PC.
+   They may switch among projects the PC has already opened (see *Tablet parity* below).
    - AC7.1 These commands from a remote client are refused with an error and have no effect.
    - AC7.2 Remote `set_config` accepts only: engine, review_transcripts, claude_model, cursor_model.
 8. **Revoke.** Settings lists paired tablets (connected or not, last seen) with **Remove**.
@@ -61,6 +62,8 @@ captures the user's voice and shows and speaks the results.
    see the same session and events.
    - AC9.1 At most one desktop connection (newer replaces older, as today) and at most one
      connection per paired device (newer replaces older). At most 4 remote connections in total.
+10. **Tablet parity** (added 2026-10-22). Away from the PC, the tablet does everything the PC
+    does except the PC-only list in story 7. See the section below.
 
 ## Architecture
 
@@ -139,6 +142,75 @@ Events:
   from a QR matrix, no innerHTML), paired-device list with Remove, and the one-time trust
   instructions.
 
+## Tablet parity (2026-10-22)
+
+The user runs Barnaby from the tablet when away from the PC, so the tablet needs the same data
+and the same live activity, in every project, not just the current one.
+
+### What a tablet can do
+
+- **Projects.** `list_projects` and `hello.projects` list the projects the PC has opened: the
+  current folder, `config.recent_projects` (engine-maintained, newest first, not in
+  `UI_MUTABLE`, so no client can write it), and every project folder in history (sessions and
+  tasks). Only folders that still exist are listed, at most 30. Each entry carries its top-level
+  folders and saved lanes, so a task can be set up for any project.
+- **Switch project.** `select_project{workspace}` points the conversation at one of those
+  projects. The engine looks the path up in the list (case- and separator-insensitive on
+  Windows) and uses the PC's own spelling, never the client's string. Anything else is refused
+  with `not_allowed`. Choosing a *new* folder is still `set_config{workspace}`, which tablets
+  can't send.
+- **Sessions.** `hello.sessions` is the 50 most recent across projects. `list_sessions{workspace}`
+  returns up to 200 of one known project, to the asking client only. Opening a session of
+  another project switches to that project, which the PC opened when the session was made.
+- **Tasks.** `task_create.workspace` starts a task in any known project (lanes are validated
+  against that project). Follow-up, cancel, approve and decline work for tasks of any project.
+  Task records reach clients as `TaskRecord.public()`, so fields added later (verified tasks:
+  `branch`, `check_results`, `verification`) pass through to every client unchanged.
+
+### Snapshot, then deltas
+
+`hello` is the full state a client starts from: config, projects, tasks (with undecided task
+cards), and `live`:
+
+| `live` field | What it restores |
+|---|---|
+| `session` | The open conversation (its last 40 turns) |
+| `turn` | The turn in flight: its text so far and its tool activity |
+| `approvals` | Undecided approval cards of the conversation |
+| `chain` | Chain or template progress |
+| `draft` | The review draft waiting to be sent |
+| `task_live` | Each running task's latest tool and text |
+| `recent` | The last 20 notifications (`notice`, `error`, `task_done`) with `nid` and age |
+
+The hub registers the client and builds and queues its `hello` with no `await` in between, and
+`Orchestrator.hello()` itself never awaits. So every event after the snapshot reaches the client,
+and every change before it is in the snapshot: no gap, so no missed approval. A turn moves from
+`live.turn` into `live.session` in the same step it's saved. `resync` re-sends `hello` to the
+asking client only; the app sends it when the page becomes visible again, for a tablet whose
+socket stayed open while it slept. Clients show only notifications whose `nid` is newer than
+the last they saw (a first connect shows the last 10 minutes).
+
+### Conflict rules
+
+- **Approvals.** One decision per request. The engine records the decision in the same step it
+  checks for one, before any `await`, so of two decisions arriving together (or a click and a
+  spoken "yes") exactly one applies. `approval_decided` / `task_approval_decided` close the card
+  on every client. The device that lost the race gets `error{code: already_decided}` and a fresh
+  `hello`, both sent to it alone. A decided card in a group that's still open can't be flipped.
+- **Review drafts.** Both devices show the draft. The first `text_submit` with its `draft_id`
+  sends it; a later one is refused with a notice. Sending or discarding broadcasts
+  `draft_closed`, which closes the draft everywhere.
+- **Everything else** is one shared state with last action wins: switching project or session,
+  the engine, review mode. Every change is broadcast, so both devices always show the current one.
+
+### Protocol additions
+
+Commands: `list_projects`, `select_project{workspace}`, `resync`, `list_sessions{workspace?}`,
+`task_create{workspace?}`. All are allowed from a tablet; the engine checks the workspace.
+Events: `projects{items}`, `draft_closed{draft_id}`, `sessions{workspace?}`, `hello.projects`,
+`hello.live`, and `nid` on `notice`, `error` and `task_done`. Replies meant for one client go
+through `server.reply()`, which sends to the client whose command is running.
+
 ## Security analysis
 
 | Threat | Mitigation |
@@ -150,6 +222,8 @@ Events:
 | Pairing code leakage via logs/Referer | Code in URL fragment; Referrer-Policy no-referrer; codes expire in 5 min and are single-use |
 | Stolen tablet | Remove the device in Settings; closes its socket and deletes its hash |
 | Tablet widening its power | Role policy (AC7); remote set_config allowlist |
+| Tablet pointing Barnaby at a folder the PC never opened | `select_project`, `list_sessions` and `task_create` accept only a project from the PC's list, resolved to the PC's own path; `recent_projects` is engine-only; `set_config{workspace}` stays desktop-only |
+| One approval decided twice (PC and tablet at once) | Decision recorded in the same step it's checked; the loser is refused and resynced |
 | Oversized frames / audio bombs | max_size 3 MB on the remote listener; clip ≤ 60 s; base64 validated |
 | Path traversal on static files | Resolved path must stay inside `app/dist`; only GET/HEAD |
 | Secrets read aloud | Tablet speaks only engine-produced `say` sentences (redacted, capped) |
@@ -158,6 +232,11 @@ Accepted risk: anyone holding the unlocked, paired tablet can drive Barnaby with
 approval rules as the PC. That's the point of the feature, and it's mitigated by revocation.
 
 ## Testing
+
+Tablet parity: `engine/tests/test_tablet_parity.py` (projects, privilege boundaries, tasks in
+other projects, snapshot contents, double-decision and double-send races, the real hub with a PC
+and a tablet), `app/src/components/parity.test.tsx`, and the e2e "tablet parity" flow (a tablet
+joins while a card is pending, declines it, and the card closes on the PC).
 
 - Engine unittest: registry (hash-only storage, revoke), pairing (expiry, single use), lockout,
   cert issue and reissue on SAN change, role policy matrix, hub broadcast and per-device

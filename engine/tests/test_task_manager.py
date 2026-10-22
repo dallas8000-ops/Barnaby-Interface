@@ -548,15 +548,17 @@ class ReviewRegressionTest(_Base):
         self.assertIn("build the orders api", prompt)
         self.assertIn("and add pagination", prompt)
 
-    async def test_tablet_cannot_follow_up_a_task_from_another_project(self):
+    async def test_tablet_follows_up_tasks_of_other_projects_while_their_folder_exists(self):
         other = Path(self._tmp.name) / "other"
         (other / "api").mkdir(parents=True)
         self.store.save_task(TaskRecord(id="x1", workspace=str(other), engine="claude", title="x",
                                         instruction="x", lanes=("api",), status="done", created_at=1.0))
         await self.build()
-        reason = self.orch.remote_check(cmd("task_follow_up", task_id="x1", text="go"))
-        self.assertIn("another project", reason or "")
+        self.assertIsNone(self.orch.remote_check(cmd("task_follow_up", task_id="x1", text="go")))
         self.assertIsNone(self.orch.remote_check(cmd("task_cancel", task_id="x1")))
+        (other / "api").rmdir()
+        other.rmdir()
+        self.assertIn("PC", self.orch.remote_check(cmd("task_follow_up", task_id="x1", text="go")) or "")
 
     async def test_task_card_describes_an_in_project_edit_honestly(self):
         await self.build()
@@ -616,7 +618,7 @@ class FullReviewRegressionTest(_Base):
         await self.settle()
         self.assertEqual(self.orch.tasks.snapshot()["approvals"], [])
 
-    async def test_tablet_cannot_approve_another_projects_task(self):
+    async def test_tablet_approves_tasks_of_any_project_not_just_the_current_one(self):
         await self.build()
         self.scripts["t"] = ["deny:docs/x.md"]
         await self.create("t", lanes=["api"])
@@ -626,8 +628,8 @@ class FullReviewRegressionTest(_Base):
         other = Path(self._tmp.name) / "other"
         other.mkdir()
         self.config.workspace = str(other)
-        self.assertIn("another project", self.orch.remote_check(cmd("approve", request_id=rid)) or "")
-        self.assertIn("another project", self.orch.remote_check(cmd("deny", request_id=rid)) or "")
+        self.assertIsNone(self.orch.remote_check(cmd("approve", request_id=rid)))
+        self.assertIsNone(self.orch.remote_check(cmd("deny", request_id=rid)))
 
     async def test_follow_up_restarts_the_clock(self):
         await self.build()
