@@ -250,8 +250,8 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 496 tests
-cd app;    npm run typecheck; npm test                                   # 129 tests
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 499 tests
+cd app;    npm run typecheck; npm test                                   # 131 tests
 .\scripts\e2e.ps1                     # 13 E2E flows: real engine process, scripted agent and fake audio (tests/e2e_engine.py)
 ```
 
