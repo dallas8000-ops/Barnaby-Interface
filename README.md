@@ -18,6 +18,23 @@ A desktop voice interface for Claude Code, Cursor and Devin. Hold a key, say wha
 
 All speech processing runs on your PC. The only network traffic is Claude Code itself.
 
+## Requirements and supported platforms
+
+| | Supported | Where it's checked |
+|---|---|---|
+| **OS** | **Windows 10 and 11 (64-bit)**, the only platform Barnaby ships for: installers are NSIS/MSI, and the shell, audio and agent launching are Windows-specific | CI on `windows-latest`: engine lint and tests; desktop-shell build (`npm run build`, `cargo clippy -D warnings`) |
+| Ubuntu | Not a supported desktop. CI uses it to run the platform-neutral parts | CI on `ubuntu-latest`: engine lint and tests, UI typecheck, Vitest and Playwright E2E (real engine process, scripted agent) |
+| **Python** | 3.11 or 3.12 (`requires-python = ">=3.11,<3.13"`) | CI runs 3.12 |
+| **Node.js** | 20 or newer | CI runs 22 |
+| **Rust / Tauri** | Rust 1.77+ (`rust-version`) with the MSVC C++ build tools; Tauri 2.11 | CI uses the latest stable Rust |
+| **websockets** | 15.x (`websockets>=15,<16`). The tablet-server tests also pass on 16 | CI installs 15 |
+| **Claude Code** | Signed in. Permission behaviour verified against Claude Code 2.1.282 | Stream parser pinned to captured `claude -p --output-format stream-json` output |
+| **Cursor CLI** | Optional. Verified against Cursor CLI 2026.09.26 on Windows | Parser pinned to captured Cursor stream output |
+| **Devin** | Optional. Devin API v1 (`https://api.devin.ai/v1`) with a personal key (`apk_user_…`) | Scripted fake of the v1 API, shapes captured from the real API; no live Devin call in CI |
+| **Tablet** | Android tablet with Chrome, on the same private Wi-Fi as the PC | E2E and server tests over real TLS on localhost |
+
+Real speech (microphone, Whisper, Kokoro) and the real agents aren't exercised in CI; [docs/manual-test-script.md](docs/manual-test-script.md) covers them on a real PC before each release.
+
 ## Setup (Windows)
 
 Prerequisites: Python 3.12 or 3.11, Node 20+, Rust with the MSVC C++ build tools, and [Claude Code](https://docs.claude.com/en/docs/claude-code) signed in (run `claude` once in a terminal).
@@ -71,12 +88,16 @@ irm 'https://cursor.com/install?win32=true' | iex
 agent login
 ```
 
-**How Cursor is kept inside the same safety model.** These behaviours were verified against Cursor CLI 2026.09.26 on Windows:
+#### How Cursor is kept inside the same safety model
+
+These behaviours were verified against Cursor CLI 2026.09.26 on Windows:
 
 - **No shell in the launch path.** Cursor installs as `agent.cmd`, a wrapper around `node.exe`, and only accepts the prompt as a command-line argument. Barnaby runs the bundled `node.exe` directly, with the prompt after `--`, so `cmd.exe` never re-parses a transcript.
 - **Shell commands are allowlisted per turn.** Each turn, Barnaby writes a private Cursor config (`%APPDATA%\Barnaby\cursor`, via `CURSOR_CONFIG_DIR`) in allowlist mode. Your own Cursor settings are never touched. A command outside the list is refused by Cursor, reported in the stream, and shown as an approval card. Approving grants exactly that command using Cursor's exact form, `Shell(cmd:args)`. The plain `Shell(cmd)` form would also match `cmd --force`. Chained commands (`&&`, `;`, `|`) are refused unless every part is allowed.
 - **File edits are not restricted by Cursor.** In headless mode, Cursor ignored both `Write()` scopes and explicit `deny` rules, and its `--sandbox` option isn't available on Windows. Barnaby's guard watches every Cursor tool call as it starts, and stops the turn immediately if Cursor reads or edits a file outside the project, or runs a command that goes beyond your rules.
-- **The trade-off.** Because the guard reacts to Cursor's own "tool started" event, it can't promise the first out-of-project write never lands: it stops Cursor at that point, not before. Claude Code, by contrast, refuses such an edit before it happens. For work that touches files outside the project folder, use Claude.
+- **The trade-off.** Because the guard reacts to Cursor's own "tool started" event, it can't promise the first out-of-project write never lands: it stops Cursor at that point, not before. Claude Code, by contrast, refuses such an edit before it happens. For work that touches files outside the project folder, use Claude. The app says this under the agent switch whenever Cursor is selected, and on Cursor task cards.
+- **You're told whether it landed.** Once Cursor is stopped, Barnaby checks the file it was reaching for and says which happened: *stopped before the file changed* (or *was created*), or *Cursor had already saved that change; check the file*. A file modified within two seconds before the turn started also counts as changed, so the report errs towards "check it", never towards a false all-clear.
+- **What was looked at, and why it stops there.** "Tool started" is the earliest event Cursor's stream offers. Nothing earlier names the file, so there is no pre-flight check to add. A file watcher that reverts can't cover "anywhere outside the project", and reverting inside the project could undo another task's or your own work. What does contain damage is where Cursor runs: a Claude or Cursor background task runs in its own git worktree (on by default; see [Background tasks](#background-tasks-several-agents-at-once)), so an out-of-lane edit lands in that task's copy, not in your checkout. Edits outside the project folder are still only stopped, not prevented.
 - **Cost.** Cursor bills against your Cursor plan and reports no per-turn cost, so Cursor turns show none.
 
 ### Devin
@@ -191,7 +212,7 @@ Even with worktrees, tasks whose folders overlap still wait for each other by de
 **How each agent is fenced in.** For a worktree task, "the project" below means its worktree:
 
 - **Claude** runs task turns in Claude Code's `default` mode with `Edit(./<lane>/**)` rules, relative to the folder it runs in. An edit outside its folders becomes an approval card on that task; approving allows exactly that one file. Edits outside the project can't be approved in a task, and for a worktree task that includes your own checkout.
-- **Cursor** can't pause for approval on file edits, so Barnaby stops the task when it starts editing outside its folders and says so. That edit may already be saved, so check it.
+- **Cursor** can't pause for approval on file edits, so Barnaby stops the task when it starts editing outside its folders and says so, including whether that edit reached the disk before Cursor was stopped. In a worktree task, an edit that did land is in the task's worktree, not your checkout. See [how Cursor is kept inside the same safety model](#how-cursor-is-kept-inside-the-same-safety-model).
 - **Devin** works in its own cloud copy of the repo and opens a pull request, so it never competes for local folders. It still counts toward the limit.
 - **Your conversation** keeps working while tasks run. If it tries to edit a folder a task in the project folder is using, you get an approval card first (tasks in their own worktree never make it ask). A conversation turn that was already running when a task started keeps its permissions until its next turn.
 - **Commands** follow the normal rules: tests and read-only commands run, and anything else is a card. Lanes and worktrees keep agents out of each other's way; they aren't a sandbox, because a test or build command you've allowed (or a check) runs project code that can still write anywhere on this PC.
@@ -229,8 +250,8 @@ For acoustic adaptation to your accent, turn on **Keep voice samples**. Your aud
 ## Tests
 
 ```powershell
-cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 496 tests
-cd app;    npm run typecheck; npm test                                   # 129 tests
+cd engine; .venv\Scripts\python -m unittest discover -s tests -t .   # 499 tests
+cd app;    npm run typecheck; npm test                                   # 131 tests
 .\scripts\e2e.ps1                     # 13 E2E flows: real engine process, scripted agent and fake audio (tests/e2e_engine.py)
 ```
 
@@ -248,6 +269,8 @@ With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `s
 
 ## Status and roadmap
 
+**Releasing:** [docs/release-checklist.md](docs/release-checklist.md) lists the pre-release steps, and [docs/manual-test-script.md](docs/manual-test-script.md) is the hands-on script for the installed app.
+
 **Verified in the build sandbox:** engine, UI, and E2E suites; the real Tauri binary spawning the engine, handing off the token, and the webview connecting under the CSP; and clean engine shutdown when the app closes.
 
 **Written for Windows, first exercised on your machine:** `taskkill /T` tree-kill, `CREATE_NO_WINDOW`, WASAPI sample-rate fallback, `.cmd` launcher handling, and live Whisper/Kokoro inference.
@@ -261,3 +284,9 @@ Next:
 - Codex as a third engine: the adapter can be built from Codex's documented `codex exec --json` format, but it's waiting on a Codex run that isn't blocked by the account's ChatGPT usage limit, so the parser can be pinned to real output.
 - Configurable global hotkey.
 - Whisper fine-tuning script over the saved voice samples.
+
+## License
+
+Copyright (c) 2026 dallas8000-ops. All rights reserved.
+
+Barnaby is proprietary software. The source is visible in this repository, but no rights to use, copy, modify or distribute it are granted without the copyright holder's written permission. See [LICENSE](LICENSE). Third-party components keep their own licenses.

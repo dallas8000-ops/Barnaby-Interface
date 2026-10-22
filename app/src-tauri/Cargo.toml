@@ -4,6 +4,8 @@ version = "1.0.0"
 description = "Barnaby: voice interface for Claude Code"
 edition = "2021"
 rust-version = "1.77"
+license-file = "../../LICENSE"
+publish = false
 
 [lib]
 name = "barnaby_lib"
