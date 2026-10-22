@@ -5,6 +5,7 @@ import type { TaskStatus, TaskView } from "../lib/protocol";
 import { useApp } from "../store/app";
 import { ApprovalCard } from "./Approvals";
 import { AssignTaskDialog } from "./AssignTaskDialog";
+import { CursorGuardNote } from "./CursorGuardNote";
 
 const ENGINE: Record<string, string> = { claude: "Claude", cursor: "Cursor", devin: "Devin" };
 const ACTIVE: TaskStatus[] = ["queued", "running", "needs_approval"];
@@ -87,6 +88,11 @@ function TaskCard({ task }: { task: TaskView }) {
         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.cls}`}>{status.label}</span>
       </div>
 
+      {task.engine === "cursor" && active && (
+        <div className="mt-2">
+          <CursorGuardNote compact />
+        </div>
+      )}
       {task.warning && (
         <p className="mt-2 flex gap-1.5 text-xs text-amber">
           <TriangleAlert size={13} aria-hidden className="mt-0.5 shrink-0" />
