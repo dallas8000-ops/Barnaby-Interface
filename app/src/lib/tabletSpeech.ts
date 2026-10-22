@@ -30,10 +30,11 @@ export class TabletSpeech {
     return Boolean(this.synth && this.Utterance);
   }
 
-  say(text: string): void {
+  /** `lang` is the BCP-47 tag the engine sends with each sentence, so Android picks a voice for it. */
+  say(text: string, lang = "en-US"): void {
     if (!this.enabled || !this.synth || !this.Utterance || !text.trim()) return;
     const u = new this.Utterance(text);
-    u.lang = "en-US";
+    u.lang = lang;
     u.onend = () => this.settle(-1);
     u.onerror = () => this.settle(-1);
     this.settle(+1);

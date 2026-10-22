@@ -19,7 +19,6 @@ import contextlib
 import io
 import json
 import logging
-import re
 import sqlite3
 import time
 import uuid
@@ -30,7 +29,7 @@ from typing import Any, Awaitable, Callable
 
 import numpy as np
 
-from . import lexicon
+from . import languages, lexicon
 from .adaptive import VoiceProfile
 from .agent import (Agent, AgentError, SessionStarted, TextDelta, ToolEnd,
                     ToolStart, TurnResult, needs_sign_in)
@@ -57,7 +56,7 @@ from .speech import SpeechComposer
 from .store import Store
 from .templates import TemplateManager, match_template, template_steps
 from .vault import MemoryCredentials, Vault, VaultError
-from .voice import STT_RATE, Recorder, Speaker, Transcriber, list_input_devices, resample
+from .voice import STT_RATE, Recorder, SetupError, Speaker, Transcriber, list_input_devices, resample
 
 log = logging.getLogger(__name__)
 
@@ -67,74 +66,62 @@ MIN_AUDIO_S = 0.35
 MIN_RMS = 0.004
 STT_TIMEOUT_S = 60.0  # generous for CPU + long clips; a stall past this is a fault, not work
 LEVEL_INTERVAL_S = 0.04
-_YES_CORE = frozenset({"yes", "yeah", "yep", "approve", "approved", "confirm", "confirmed", "proceed", "ahead"})
-_NO_CORE = frozenset({"no", "nope", "deny", "denied", "don't", "dont", "reject", "cancel", "stop"})
-_FILLER = frozenset({"go", "do", "it", "please", "ok", "okay", "that", "sure", "thanks", "and", "just"})
-
-
 ENGINE_LABELS = {"claude": "Claude", "cursor": "Cursor", "devin": "Devin"}
-_ENGINE_WORDS = {"claude": "claude", "clod": "claude", "cloud": "claude", "cursor": "cursor", "curser": "cursor",
-                 "devin": "devin", "devon": "devin", "deven": "devin"}
-_ROUTE_RE = re.compile(
-    r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:(?:have|ask|use|let|get|tell)\s+)?"
-    r"(claude|clod|cloud|cursor|curser|devin|devon|deven)\b(?:\s*[,:.\-]\s*|\s+(?:to\s+)?|\s*$)(.*)$",
-    re.IGNORECASE | re.DOTALL)
 
 
-def route_engine(text: str) -> tuple[str | None, str]:
+def route_engine(text: str, lang: str = "en") -> tuple[str | None, str]:
     """"Cursor, fix the build" / "have Claude run the tests" / "use Cursor" ->
     (engine, remaining instruction). Only a leading address counts, so
     "add a cursor to the table" stays an ordinary instruction.
 
     "cloud" is accepted only with a routing verb ("use cloud ...") because
     Whisper often hears "Claude" that way, but "cloud functions ..." is real.
+    Phrasing comes from the language's grammar table (English is always tried too).
     """
-    m = _ROUTE_RE.match(text)
-    if not m:
-        return None, text
-    word = m.group(1).lower()
-    has_verb = bool(re.match(r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:have|ask|use|let|get|tell)\s", text, re.IGNORECASE))
-    has_sep = bool(re.match(r"^\s*(?:hey\s+|ok(?:ay)?\s+)?\w+\s*[,:.\-]", text))
-    if word in ("cloud", "clod") and not has_verb:
-        return None, text
-    if not has_verb and not has_sep and m.group(2).strip():
-        return None, text  # "cursor position is wrong" is not an address
-    return _ENGINE_WORDS[word], m.group(2).strip()
+    for g in languages.grammars(lang):
+        for rx, has_verb in g.routes:
+            m = rx.match(text)
+            if not m:
+                continue
+            word = m.group("engine").lower()
+            if word in g.verb_only and not has_verb:
+                continue
+            return g.engines[word], m.group("rest").strip()
+    return None, text
 
 
-_SEND = frozenset({"send", "send it", "send that", "submit", "submit it", "go", "go ahead", "do it"})
-_DISCARD = frozenset({"scratch that", "discard", "discard it", "discard that", "cancel that", "never mind",
-                      "nevermind", "delete that", "forget it", "forget that"})
-
-
-def classify_draft_command(text: str) -> str | None:
+def classify_draft_command(text: str, lang: str = "en") -> str | None:
     """Hands-free control of a pending review draft: "send it" / "scratch that".
     Only the whole short phrase counts, so "send the report to finance" is an
     ordinary instruction."""
-    words = re.sub(r"[^a-z' ]+", " ", text.lower()).split()
-    words = [w for w in words if w not in ("please", "ok", "okay", "barnaby", "now", "yes")]
-    phrase = " ".join(words)
-    if phrase in _SEND:
-        return "send"
-    if phrase in _DISCARD:
-        return "discard"
+    for g in languages.grammars(lang):
+        words = g.tokens(text)
+        if words is None:
+            continue
+        phrase = (" " if g.spaced else "").join(w for w in words if w not in g.draft_filler)
+        if phrase in g.send:
+            return "send"
+        if phrase in g.discard:
+            return "discard"
     return None
 
 
-def classify_spoken_decision(text: str) -> bool | None:
+def classify_spoken_decision(text: str, lang: str = "en") -> bool | None:
     """True/False for a short spoken yes/no; None if it's anything else.
 
     Every word must be a decision word or filler, so "yes, and also delete the
     logs" is NOT an approval: it's a new instruction and must go to the agent.
     """
-    words = re.findall(r"[a-z']+", text.lower())
-    if not words or len(words) > 6:
-        return None
-    yes = any(w in _YES_CORE for w in words) or words in (["do", "it"], ["go", "ahead"])
-    no = any(w in _NO_CORE for w in words)
-    if yes == no or any(w not in _YES_CORE | _NO_CORE | _FILLER for w in words):
-        return None
-    return yes
+    for g in languages.grammars(lang):
+        words = g.tokens(text)
+        if not words or len(words) > 6:
+            continue
+        yes = any(w in g.yes for w in words) or tuple(words) in g.yes_phrases
+        no = any(w in g.no for w in words)
+        if yes == no or any(w not in g.yes | g.no | g.filler for w in words):
+            continue
+        return yes
+    return None
 
 
 @dataclass
@@ -219,7 +206,8 @@ class Orchestrator:
                  tablet_factory: Callable[[int, Callable[[], None]], Any] | None = None,
                  task_agent_factory: Callable[[str, str], Agent] | None = None,
                  task_forget: Callable[[str], None] | None = None,
-                 claude_auth: ClaudeAuth | None = None) -> None:
+                 claude_auth: ClaudeAuth | None = None,
+                 stt_installed: Callable[[], dict[str, bool]] | None = None) -> None:
         self.config = config
         self.store = store
         self.profile = profile
@@ -262,7 +250,7 @@ class Orchestrator:
         self._turn_task: asyncio.Task[None] | None = None
         self._drafts: dict[str, Draft] = {}
         self._approvals: ApprovalGroup | None = None
-        self._speech_q: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
+        self._speech_q: asyncio.Queue[tuple[int, str, str]] = asyncio.Queue()  # (generation, sentence, language)
         self._speech_gen = 0
         self._speaking = False
         self._speech_task: asyncio.Task[None] | None = None
@@ -280,6 +268,11 @@ class Orchestrator:
         self._notices: list[str] = []
         # Claude sign-in (None in tests that don't exercise it: nothing then touches the real CLI).
         self._claude_auth = claude_auth
+        # Conversation language: the configured one, or in Auto the last one heard.
+        self.language = config.spoken_language if config.spoken_language in languages.LANGUAGES else "en"
+        # Which recognition models are already downloaded (None in tests: never touch the HF cache).
+        self._stt_installed_probe = stt_installed
+        self._stt_installed: dict[str, bool] = {}
         self._claude_state: dict[str, Any] = {"state": "unknown"}
         self._claude_prev: dict[str, Any] = self._claude_state
         self._claude_login_task: asyncio.Task[None] | None = None
@@ -319,7 +312,8 @@ class Orchestrator:
                   templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(), tablet=self._tablet_status(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components,
-                  tasks=self.tasks.snapshot(), claude_auth=self._claude_state)
+                  tasks=self.tasks.snapshot(), claude_auth=self._claude_state,
+                  language=self.language, stt_installed=self._stt_installed)
 
     def take_notices(self) -> list[str]:
         """Startup notices (e.g. a repaired database) to show once, to the first window that connects."""
@@ -348,13 +342,42 @@ class Orchestrator:
             loader = getattr(component, "load", None)
             if loader is None:
                 continue
-            await self._component(name, "loading")
+            await self._component(name, "loading", await self._pending_download(component))
             try:
                 await loop.run_in_executor(None, loader)
                 await self._component(name, "ready", getattr(component, "status_detail", None))
             except Exception as exc:  # noqa: BLE001
                 log.exception("%s failed to load", name)
                 await self._component(name, "error", _component_hint(name, exc))
+            if name == "stt":
+                await self._refresh_stt_installed()
+
+    async def _pending_download(self, component: Any) -> str | None:
+        probe = getattr(component, "pending_download", None)
+        if probe is None:
+            return None
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, probe)
+        except Exception:  # noqa: BLE001 - only a status hint
+            return None
+
+    async def _refresh_stt_installed(self) -> None:
+        if self._stt_installed_probe is None:
+            return
+        try:
+            self._stt_installed = await asyncio.get_running_loop().run_in_executor(None, self._stt_installed_probe)
+        except Exception:  # noqa: BLE001
+            log.exception("could not list installed speech models")
+            return
+        await self.emit(ev("stt_models", installed=self._stt_installed))
+
+    def _hear_language(self, detected: str | None) -> None:
+        """Auto mode follows the language of each utterance; a fixed setting never moves."""
+        if self.config.spoken_language == languages.AUTO:
+            if detected in languages.LANGUAGES:
+                self.language = detected
+        elif self.config.spoken_language in languages.LANGUAGES:
+            self.language = self.config.spoken_language
 
     # ------------------------------------------------------------ dispatch
     async def handle(self, cmd: Command) -> None:
@@ -524,6 +547,7 @@ class Orchestrator:
             return
         finally:
             self._transcribing = False
+        self._hear_language(getattr(self.transcriber, "last_language", None))
         shown = self.profile.apply(lexicon.normalize(raw))
         if not shown:
             if not handsfree:
@@ -534,7 +558,7 @@ class Orchestrator:
         # Hands-free: "send it" / "scratch that" act on a pending review draft. The UI
         # submits it, so edits typed into the draft box are kept.
         if handsfree and self._drafts and self.config.review_transcripts:
-            action = classify_draft_command(shown)
+            action = classify_draft_command(shown, self.language)
             if action:
                 if action == "discard":
                     self._drafts.clear()
@@ -544,7 +568,7 @@ class Orchestrator:
 
         # Spoken approval while approvals are pending.
         if self._approvals and not self._approvals.done():
-            decision = classify_spoken_decision(shown)
+            decision = classify_spoken_decision(shown, self.language)
             if decision is not None:
                 await self.emit(ev("transcript", draft_id=None, heard=raw, text=shown, review=False))
                 await self._voice_decision(decision)
@@ -564,12 +588,15 @@ class Orchestrator:
         text = text.strip()
         if not text:
             return
-        task = parse_task_command(text)
+        if self.config.spoken_language == languages.AUTO:
+            self._hear_language(languages.script_language(text))  # typed Hindi/Japanese/Chinese
+        lang = self.language
+        task = parse_task_command(text, lang)
         if task is not None:
             self._drafts.pop(draft_id, None) if draft_id else None
             await self._voice_task(*task)
             return
-        routed, rest = route_engine(text)
+        routed, rest = route_engine(text, lang)
         if routed and routed in self.agents:
             if routed != self.config.engine:
                 if not await self._switch_engine(routed):
@@ -587,14 +614,14 @@ class Orchestrator:
             if self.config.save_voice_samples:
                 self._save_sample(draft, text)
         interrupting = await self._supersede()
-        tmatch = match_template(text, self._template_list())
+        tmatch = match_template(text, self._template_list(), lang)
         if tmatch:
             tpl, ctx = tmatch
             await self._start_chain(template_steps(tpl), name=str(tpl.get("name") or tpl.get("id")),
                                     context=ctx, interrupted=interrupting)
             return
         if self.config.command_chain_enabled:
-            steps = split_chain(text)
+            steps = split_chain(text, lang)
             if len(steps) > 1:
                 limit = self.config.command_chain_max_depth
                 if len(steps) > limit:
@@ -620,8 +647,8 @@ class Orchestrator:
         t = await self.tasks.create(engine, instruction, lanes, None)
         if t is not None:
             who = ENGINE_LABELS.get(engine, engine)
-            verb = "Started" if t.status == "running" else "Queued"
-            self._enqueue_speech([redact_for_speech(f"{verb} {who} on {t.title}.")], self._speech_gen)
+            said = languages.message(self.language, "task", t.status == "running", who, t.title)
+            self._enqueue_speech([redact_for_speech(said)], self._speech_gen)
         await self._set_state(self._resting_state())
 
     async def _supersede(self) -> bool:
@@ -708,11 +735,10 @@ class Orchestrator:
         done = n if reason == "completed" else chain.index
         await self.emit(ev_command_chain_end(chain.id, reason == "completed", reason, done, n))
         if reason == "completed":
-            self._enqueue_speech([f"All {n} steps are done."], self._speech_gen)
+            self._enqueue_speech([languages.message(self.language, "done", n)], self._speech_gen)
         elif reason in ("failed", "declined"):
-            why = "you declined an action" if reason == "declined" else "that step didn't finish"
-            self._enqueue_speech([f"I stopped after step {chain.index + 1} of {n}, because {why}."],
-                                 self._speech_gen)
+            said = languages.message(self.language, "stopped", chain.index + 1, n, reason == "declined")
+            self._enqueue_speech([said], self._speech_gen)
 
     async def _start_turn(self, prompt: str, *, display_text: str, grant: Grant | None,
                           system_note: bool = False) -> bool:
@@ -735,6 +761,9 @@ class Orchestrator:
             await self.emit(ev("sessions", items=self.store.list_sessions()))
         self.session_engine = engine
         turn_id = uuid.uuid4().hex[:12]
+        instruction = languages.reply_instruction(self.language)
+        if instruction:
+            prompt = f"{instruction} {prompt}"  # the agent answers in the user's language
         await self.emit(ev("turn_start", turn_id=turn_id, text=display_text,
                            session_id=self.session_id, system=system_note, engine=engine))
         self._turn_task = asyncio.create_task(self._run_turn(turn_id, prompt, display_text, grant))
@@ -743,7 +772,7 @@ class Orchestrator:
     async def _run_turn(self, turn_id: str, prompt: str, display_text: str, grant: Grant | None) -> None:
         await self._set_state(State.THINKING)
         self._cancel_requested = False
-        composer = SpeechComposer(self.config.max_spoken_chars)
+        composer = SpeechComposer(self.config.max_spoken_chars, languages.message(self.language, "overflow"))
         tools: list[dict[str, Any]] = []
         streamed: list[str] = []
         result: TurnResult | None = None
@@ -897,8 +926,7 @@ class Orchestrator:
         self._approvals = group
         await self._set_state(State.AWAITING_APPROVAL)
         n = len(group.items)
-        self._enqueue_speech([f"I need your OK for {n} action{'s' if n > 1 else ''}. It's on screen."],
-                             self._speech_gen)
+        self._enqueue_speech([languages.message(self.language, "approvals", n)], self._speech_gen)
 
     async def _voice_decision(self, approve: bool) -> None:
         group = self._approvals
@@ -910,7 +938,7 @@ class Orchestrator:
                     continue  # critical items need a deliberate click
                 await self._decide(p.request_id, approve)
         if group is self._approvals and not group.done():
-            self._enqueue_speech(["Some items need you to confirm on screen."], self._speech_gen)
+            self._enqueue_speech([languages.message(self.language, "confirm")], self._speech_gen)
             await self._set_state(State.AWAITING_APPROVAL)
 
     async def _decide(self, request_id: str, approve: bool) -> None:
@@ -1011,7 +1039,7 @@ class Orchestrator:
         if not self.config.tts_enabled:
             return
         for s in sentences:
-            self._speech_q.put_nowait((gen, s))
+            self._speech_q.put_nowait((gen, s, self.language))
 
     def _stop_speaking(self) -> None:
         self._speech_gen += 1
@@ -1024,14 +1052,18 @@ class Orchestrator:
     async def _speech_worker(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
-            gen, sentence = await self._speech_q.get()
+            gen, sentence, lang = await self._speech_q.get()
             if gen != self._speech_gen:
                 continue
             if self._remote_listeners:
                 # A tablet is connected: it speaks with its own voice. It gets the same
-                # capped, secret-redacted sentences the PC would have spoken.
-                await self.emit(ev("say", text=sentence))
+                # capped, secret-redacted sentences the PC would have spoken, plus the
+                # BCP-47 tag so its speechSynthesis picks a voice for that language.
+                await self.emit(ev("say", text=sentence, lang=languages.bcp47(lang)))
                 continue
+            set_language = getattr(self.speaker, "set_language", None)
+            if set_language is not None:
+                set_language(lang)
             if not self._speaking:
                 self._speaking = True
                 await self.emit(ev("speaking", active=True))
@@ -1085,9 +1117,13 @@ class Orchestrator:
             self.session_id = self.claude_session_id = self.session_engine = None
             self._refresh_project_terms()
             await self.emit(ev("session_loaded", session=None))
-        if self._transcriber_factory and (before["whisper_model"], before["whisper_device"]) != (after["whisper_model"], after["whisper_device"]):
+        if before["spoken_language"] != after["spoken_language"]:
+            self._hear_language(None)  # a fixed language applies now; Auto keeps the last one heard
+        if self._transcriber_factory and _stt_key(before) != _stt_key(after):
             self.transcriber = self._transcriber_factory(self.config)
             asyncio.create_task(self._preload_one("stt", self.transcriber))
+        elif hasattr(self.transcriber, "language"):
+            self.transcriber.language = self.config.spoken_language  # same model, listens for the new language
         if self._speaker_factory and (before["tts_voice"], before["tts_speed"]) != (after["tts_voice"], after["tts_speed"]):
             self._stop_speaking()
             self.speaker = self._speaker_factory(self.config)
@@ -1315,12 +1351,14 @@ class Orchestrator:
         return True
 
     async def _preload_one(self, name: str, component: Any) -> None:
-        await self._component(name, "loading")
+        await self._component(name, "loading", await self._pending_download(component))
         try:
             await asyncio.get_running_loop().run_in_executor(None, component.load)
             await self._component(name, "ready", getattr(component, "status_detail", None))
         except Exception as exc:  # noqa: BLE001
             await self._component(name, "error", _component_hint(name, exc))
+        if name == "stt":
+            await self._refresh_stt_installed()
 
     async def _emit_voice_profile(self) -> None:
         await self.emit(ev("voice_profile",
@@ -1355,7 +1393,15 @@ def _approval_detail(tool_name: str, tool_input: dict[str, Any]) -> str:
     return ", ".join(f"{k}={str(v)[:120]}" for k, v in list(tool_input.items())[:4])
 
 
+def _stt_key(cfg: dict[str, Any]) -> tuple[str, str]:
+    """What the loaded recognition model depends on: the model actually used
+    (English-only models are swapped outside English) and the device."""
+    return languages.stt_model_for(cfg["whisper_model"], cfg["spoken_language"]), cfg["whisper_device"]
+
+
 def _component_hint(name: str, exc: BaseException) -> str:
+    if isinstance(exc, SetupError):
+        return str(exc)
     if isinstance(exc, ImportError):
         pkg = "faster-whisper" if name == "stt" else "kokoro soundfile"
         return f"Missing package ({exc.name or exc}). Run: pip install {pkg}"

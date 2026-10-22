@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from .languages import SPOKEN_CHOICES, WHISPER_MODELS
+
 APP_NAME = "Barnaby"
 
 # Bash commands the agent may run without asking. Exact-prefix rules in Claude
@@ -49,7 +51,8 @@ class Config:
     engine: str = "claude"               # which coding agent runs turns: claude | cursor | devin
     cursor_bin: str = ""                 # override path to Cursor's CLI (node entry or binary)
     cursor_model: str = ""               # Cursor model id; empty = Cursor's default ("Auto")
-    whisper_model: str = "small.en"
+    whisper_model: str = "small.en"      # .en models are swapped for a multilingual sibling outside English
+    spoken_language: str = "en"          # "auto" (detect per utterance) or a languages.LANGUAGES code
     whisper_device: str = "auto"         # auto | cpu | cuda
     input_device: int | None = None      # sounddevice index; None = system default
     tts_enabled: bool = True
@@ -89,6 +92,7 @@ class Config:
     # not something a compromised renderer can flip over the socket.
     UI_MUTABLE = frozenset({
         "workspace", "claude_model", "engine", "cursor_model", "continuous_mode_enabled", "continuous_mode_timeout", "whisper_model", "whisper_device", "input_device",
+        "spoken_language",
         "tts_enabled", "tts_voice", "tts_speed", "max_spoken_chars",
         "review_transcripts", "save_voice_samples", "tablet_access", "tablet_port",
         "max_parallel_tasks", "task_timeout_s", "task_lanes",
@@ -104,7 +108,10 @@ class Config:
         except (OSError, json.JSONDecodeError):
             return cls()
         known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in raw.items() if k in known})
+        # A hand-edited value the engine can't use falls back to the default instead
+        # of failing later inside speech recognition.
+        checked = {k for k in ("whisper_model", "spoken_language") if k in raw and not _VALIDATORS[k](raw[k])}
+        return cls(**{k: v for k, v in raw.items() if k in known and k not in checked})
 
     def save(self, path: Path | None = None) -> None:
         path = path or data_dir() / "config.json"
@@ -204,7 +211,8 @@ _VALIDATORS: dict[str, Any] = {
     "continuous_mode_enabled": lambda v: isinstance(v, bool),
     "continuous_mode_timeout": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.6 <= v <= 5.0,
     "cursor_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._" for c in v),
-    "whisper_model": lambda v: v in {"tiny.en", "base.en", "small.en", "medium.en", "large-v3", "distil-large-v3"},
+    "whisper_model": lambda v: isinstance(v, str) and v in WHISPER_MODELS,
+    "spoken_language": lambda v: isinstance(v, str) and v in SPOKEN_CHOICES,
     "whisper_device": lambda v: v in {"auto", "cpu", "cuda"},
     "input_device": lambda v: v is None or (_is_int(v) and v >= 0),
     "tts_enabled": lambda v: isinstance(v, bool),
