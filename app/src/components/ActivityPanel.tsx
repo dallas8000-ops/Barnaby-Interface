@@ -83,7 +83,7 @@ export function ActivityPanel() {
   const [tab, setTab] = useState<"activity" | "tasks">("activity");
   const attention = useApp((s) => s.taskAttention);
   const seen = useApp((s) => s.seenTasks);
-  const active = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "needs_approval").length);
+  const active = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "verifying" || t.status === "needs_approval").length);
 
   const panel = useRef<HTMLElement>(null);
   const tabs = ["activity", "tasks"] as const;

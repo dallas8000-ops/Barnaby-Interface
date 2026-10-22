@@ -259,9 +259,23 @@ class ReviewRegressionServerTest(_ServerBase):
         ws, _ = await self.pair()
         await ws.recv()  # hello
         await ws.send(json.dumps({"type": "text_submit", "text": "y" * 19_000}))
-        await asyncio.sleep(0.05)
-        self.assertIn("text_submit", self.orch.handled)
+        async with asyncio.timeout(5):  # handled, not closed with 1009: the cap was lifted
+            while "text_submit" not in self.orch.handled:
+                await asyncio.sleep(0.01)
         await ws.close()
+
+    def test_frame_limit_is_lifted_on_every_websockets_layout(self):
+        # websockets 16 ignores Protocol.max_size (it reads max_message_size), so the old
+        # `protocol.max_size = ...` left paired tablets capped at 4 KB.
+        from types import SimpleNamespace
+        from barnaby_engine.remote import raise_frame_limit
+        v15, v16 = SimpleNamespace(max_size=4096), SimpleNamespace(max_message_size=4096, max_fragment_size=None)
+        raise_frame_limit(v15, 3 << 20)
+        raise_frame_limit(v16, 3 << 20)
+        raise_frame_limit(None, 3 << 20)  # no protocol: stays capped, no crash
+        self.assertEqual(v15.max_size, 3 << 20)
+        self.assertEqual(v16.max_message_size, 3 << 20)
+        self.assertFalse(hasattr(v16, "max_size"))
 
     async def test_unauthenticated_connections_are_capped(self):
         # F4: unlimited pending sockets per address.

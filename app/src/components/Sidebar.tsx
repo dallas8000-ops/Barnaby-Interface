@@ -102,7 +102,7 @@ export function Sidebar({ onSettings, onProfile, onTasks }: { onSettings: () => 
 
   const remote = useApp((s) => s.role === "remote");
   const attention = useApp((s) => s.taskAttention);
-  const activeTasks = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "needs_approval").length);
+  const activeTasks = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "verifying" || t.status === "needs_approval").length);
   const multiProject = useApp((s) => s.projects.length > 1);
   const fetched = useApp((s) => s.projectSessions[workspace]);
   const [scope, setScope] = useState<"project" | "all">("project");

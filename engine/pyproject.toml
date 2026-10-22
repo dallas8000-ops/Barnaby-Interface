@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]  # SPDX `license` string (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "barnaby-engine"
 version = "1.0.0"
 description = "Local voice pipeline for driving Claude Code by speech"
 requires-python = ">=3.11,<3.13"
+license = "LicenseRef-Proprietary"  # all rights reserved; see LICENSE at the repo root
 dependencies = [
     "websockets>=15,<16",
     "pydantic>=2.7,<3",

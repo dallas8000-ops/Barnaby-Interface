@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -134,6 +135,25 @@ class GuardTest(unittest.TestCase):
         g = CursorGuard(str(self.ws), [], Grant(allow=("Bash(git diff > out.txt)",), add_dirs=()))
         self.assertIsNone(g.check("Bash", {"command": "git diff > out.txt"}))
 
+    def test_aftermath_says_whether_the_blocked_write_landed(self):
+        old = self.ws / "old.txt"
+        old.write_text("before")
+        hour_ago = time.time() - 3600
+        os.utime(old, (hour_ago, hour_ago))
+        since = time.time_ns()
+        fresh = self.ws / "fresh.txt"
+        fresh.write_text("cursor wrote this")
+        cases = [("Edit", old, "stopped it before the file changed"),
+                 ("Write", fresh, "had already saved"),
+                 ("Write", self.ws / "never.txt", "before the file was created"),
+                 ("Delete", old, "still there"),
+                 ("Delete", self.ws / "never.txt", "gone")]
+        for name, path, expected in cases:
+            with self.subTest(name=name, path=path.name):
+                self.assertIn(expected, self.guard.aftermath(name, {"file_path": str(path)}, since))
+        self.assertIn("had already saved", self.guard.aftermath("Write", {"file_path": "fresh.txt"}, since))
+        self.assertEqual(self.guard.aftermath("Read", {"file_path": str(old)}, since), "")
+
 
 class RouteTest(unittest.TestCase):
     def test_routes(self):
@@ -178,7 +198,9 @@ if mode == "replay":
         if os.sep == "/":  # the captured separators after the prefix are Windows-style
             line = line.replace(here + "\\\\", here + "/")
         sys.stdout.write(line); sys.stdout.flush()
-elif mode == "outside_edit":
+elif mode in ("outside_edit", "outside_edit_lands"):
+    if mode == "outside_edit_lands":  # the write reaches the disk before the started event is read
+        open(os.environ["FAKE_OUTSIDE"], "w").write("x")
     out({"type": "tool_call", "subtype": "started", "call_id": "e1",
          "tool_call": {"editToolCall": {"args": {"path": os.environ["FAKE_OUTSIDE"], "streamContent": "x"}}}})
     time.sleep(60)
@@ -261,9 +283,18 @@ class CursorProcessTest(unittest.IsolatedAsyncioTestCase):
                     async for e in agent.run("x", workspace=str(self.ws), session_id=None, grant=None):
                         seen.append(e)
         self.assertIn("outside your project", str(ctx.exception))
+        self.assertIn("before the file was created", str(ctx.exception))
         self.assertIsInstance(seen[-1], ToolEnd)
         self.assertEqual(seen[-1].preview, "Blocked by Barnaby")
         self.assertFalse(pid_alive(self.rec()["pid"]), "Cursor must be killed, not left running")
+
+    async def test_guard_reports_a_write_that_already_landed(self):
+        with self.assertRaises(AgentError) as ctx:
+            async with asyncio.timeout(20):
+                await self.collect(self.agent(), "outside_edit_lands")
+        self.assertIn("outside your project", str(ctx.exception))
+        self.assertIn("had already saved that change", str(ctx.exception))
+        self.assertFalse(pid_alive(self.rec()["pid"]))
 
     async def test_missing_result_surfaces_stderr(self):
         with self.assertRaises(AgentError) as ctx:

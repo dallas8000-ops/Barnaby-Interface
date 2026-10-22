@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { send } from "../lib/client";
 import { useApp } from "../store/app";
+import { CursorGuardNote } from "./CursorGuardNote";
 import { EngineSwitch } from "./EngineSwitch";
 import { HandsFreeToggle } from "./HandsFreeToggle";
 import { TemplatePicker } from "./TemplatePicker";
@@ -18,6 +19,7 @@ export function Composer() {
   const [typed, setTyped] = useState("");
   const draftCommand = useApp((s) => s.draftCommand);
   const handsFreeOn = useApp((s) => s.continuousMode);
+  const cursorSelected = useApp((s) => s.config?.engine === "cursor");
   const draftRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -133,6 +135,11 @@ export function Composer() {
         </div>
         <p className="hidden text-xs text-muted lg:block">Chain steps with “then”. Switch agents with “Cursor, …” or “Devin, …”.</p>
       </div>
+      {cursorSelected && (
+        <div className="mt-1.5">
+          <CursorGuardNote />
+        </div>
+      )}
     </form>
   );
 }

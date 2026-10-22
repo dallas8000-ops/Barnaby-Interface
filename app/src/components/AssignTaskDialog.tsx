@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { send } from "../lib/client";
-import type { AgentEngine } from "../lib/protocol";
+import type { AgentEngine, CheckSpec } from "../lib/protocol";
 import { useApp } from "../store/app";
+import { ChecksEditor } from "./ChecksEditor";
 import { Modal } from "./Modal";
 
 const ENGINE_LABEL: Record<AgentEngine, string> = { claude: "Claude", cursor: "Cursor", devin: "Devin" };
@@ -33,6 +34,11 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
   const [lanes, setLanes] = useState<string[]>([]);
   const [instruction, setInstruction] = useState("");
   const [title, setTitle] = useState("");
+  const currentChecks = useApp((s) => s.projectChecks);
+  const projectChecks = chosen ? (chosen.checks ?? []) : currentChecks;
+  const desktop = useApp((s) => s.role === "desktop");
+  // null: use the project's checks (Settings); a list: this task's own (only the PC may choose).
+  const [checks, setChecks] = useState<CheckSpec[] | null>(null);
   const tasks = useApp((s) => s.tasks);
   const toasts = useApp((s) => s.toasts);
   // Waiting for the engine: close once the new task shows up; stay open (keeping what was
@@ -67,7 +73,8 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
     const lastToast = toasts.reduce((m, t) => Math.max(m, t.id), 0);
     pending.current = { ids: new Set(tasks.map((t) => t.id)), toast: lastToast };
     const where = chosen ? { workspace: chosen.path } : {};
-    if (send({ type: "task_create", engine, instruction: text, lanes, title: title.trim() || null, ...where })) setWaiting(true);
+    const own = engine !== "devin" && checks !== null ? { checks } : {};
+    if (send({ type: "task_create", engine, instruction: text, lanes, title: title.trim() || null, ...own, ...where })) setWaiting(true);
     else pending.current = null;
   };
 
@@ -90,7 +97,8 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
               value={project}
               onChange={(e) => {
                 setProject(e.target.value);
-                setLanes([]); // folders belong to the project
+                setLanes([]); // folders and checks belong to the project
+                setChecks(null);
               }}
               className="mt-1 w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none"
             >
@@ -172,6 +180,35 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
             className="mt-1 w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none"
           />
         </div>
+        <fieldset>
+          <legend className="text-sm font-medium text-ink">How Barnaby checks it</legend>
+          {engine === "devin" ? (
+            <p className="mt-1 text-xs text-muted">Devin's work is a pull request in its cloud, so Barnaby doesn't run checks on it (it's shown as unverified).</p>
+          ) : checks === null ? (
+            <p className="mt-1 text-xs text-muted">
+              {projectChecks.length ? (
+                <>
+                  Done only when these pass: {projectChecks.map((c) => (c.dir ? `${c.run} (in ${c.dir}/)` : c.run)).join(", ")}.
+                </>
+              ) : (
+                "No checks are set for this project, so the result will be unverified."
+              )}{" "}
+              {desktop && (
+                <button type="button" onClick={() => setChecks([...projectChecks])} className="text-cyan underline-offset-2 hover:underline">
+                  Change for this task
+                </button>
+              )}
+            </p>
+          ) : (
+            <div className="mt-1.5">
+              <ChecksEditor value={checks} onChange={setChecks} folders={folders} label="Checks for this task" />
+              <button type="button" onClick={() => setChecks(null)} className="mt-1 text-xs text-muted hover:text-ink">
+                Use the project's checks instead
+              </button>
+            </div>
+          )}
+        </fieldset>
+
         <div>
           <label htmlFor="task-title" className="text-sm font-medium text-ink">
             Short name <span className="font-normal text-muted">(optional)</span>

@@ -22,7 +22,9 @@ tests/fixtures/cursor_*.jsonl. Load-bearing decisions:
   unavailable on Windows. :class:`CursorGuard` is therefore the enforcement
   point: any edit outside the project, or any command beyond what Barnaby's
   own (Claude-equivalent, exact) rules allow, stops the turn the moment the
-  tool call starts.
+  tool call starts. Cursor reports a tool call only as it starts, so the
+  first such write may already be on disk; after stopping Cursor the guard
+  checks the file (:meth:`CursorGuard.aftermath`) and says whether it did.
 * The directory is **persistent**, not temporary: Cursor stores chat
   history there, and ``--resume`` needs it on the next turn.
   Login tokens are stored elsewhere (verified), so scoping doesn't log out.
@@ -35,6 +37,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -155,6 +158,11 @@ def build_config(allow: list[str]) -> dict[str, Any]:
 
 _CHAIN_RE = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
 _REDIRECT_OR_SUBST = re.compile(r"[<>`]|\$\(")
+_FILE_WRITES = ("Edit", "Write", "Delete")
+# A file modified up to this long before the turn started still counts as "changed by
+# Cursor": misreporting an untouched file as saved is the safe direction (FAT-style 2 s
+# mtime granularity, clock skew), the opposite never is.
+_MTIME_SLACK_NS = 2_000_000_000
 
 
 class CursorGuard:
@@ -185,11 +193,8 @@ class CursorGuard:
         self.workspace = self.roots[0]
 
     def _inside(self, raw: str) -> bool:
-        path = Path(raw)
-        if not path.is_absolute():
-            path = self.workspace / path
         try:
-            resolved = path.resolve()
+            resolved = self.resolve(raw).resolve()
         except OSError:
             return False
         return any(resolved == r or r in resolved.parents for r in self.roots)
@@ -210,15 +215,42 @@ class CursorGuard:
         ws = str(self.workspace)
         if self.allow_lanes and lane_of(ws, raw, self.allow_lanes) is None:
             return (f"Stopped Cursor: this task tried to change {raw}, which is outside its folders "
-                    f"({', '.join(self.allow_lanes)}). That edit may already be saved; check it. "
+                    f"({', '.join(self.allow_lanes)}). "
                     "Add the folder to the task, or use Claude, which can ask first.")
         busy = lane_of(ws, raw, self.busy_lanes) if self.busy_lanes else None
         if busy is not None:
             where = f"in {busy}, which" if busy else "in the project, which"
             return (f"Stopped Cursor: {raw} is {where} a background task is working on. "
-                    "That edit may already be saved; check it. Wait for the task, or use Claude, "
-                    "which can ask first.")
+                    "Wait for the task, or use Claude, which can ask first.")
         return None
+
+    def resolve(self, raw: str) -> Path:
+        path = Path(raw)
+        return path if path.is_absolute() else self.workspace / path
+
+    def aftermath(self, name: str, tool_input: dict[str, Any], since_ns: int) -> str:
+        """After Cursor was stopped for a file tool: did the change reach the disk?
+
+        The guard sees a tool call only as it starts, so the write may have landed in
+        the moment before the kill. Checked once Cursor is dead, so the answer is final.
+        """
+        raw = str(tool_input.get("file_path") or "")
+        if name not in _FILE_WRITES or not raw:
+            return ""
+        try:
+            st = self.resolve(raw).stat()
+        except FileNotFoundError:
+            st = None
+        except OSError:
+            return "Barnaby couldn't check whether that file changed; check it."
+        if name == "Delete":
+            return ("The file is still there." if st else
+                    "The file is gone now: Cursor deleted it, or it never existed. Check it.")
+        if st is None:
+            return "Barnaby stopped it before the file was created."
+        if st.st_mtime_ns >= since_ns - _MTIME_SLACK_NS:
+            return "Cursor had already saved that change before it was stopped; check the file."
+        return "Barnaby stopped it before the file changed."
 
     def check(self, name: str, tool_input: dict[str, Any]) -> str | None:
         if name in ("Edit", "Write", "Delete", "Read"):
@@ -373,6 +405,7 @@ class CursorAgent(CliAgent):
     async def run(self, prompt: str, *, workspace: str, session_id: str | None,
                   grant: Grant | None, scope: Scope | None = None) -> AsyncIterator[AgentEvent]:
         guard = CursorGuard(workspace, self.safe_bash, grant, scope) if workspace and Path(workspace).is_dir() else None
+        started_ns = time.time_ns()
         async with contextlib.aclosing(super().run(prompt, workspace=workspace, session_id=session_id,
                                                    grant=grant, scope=scope)) as stream:
             async for event in stream:
@@ -382,7 +415,8 @@ class CursorAgent(CliAgent):
                         await self._kill_tree()  # before Cursor gets further; the base finally re-checks
                         yield event
                         yield ToolEnd(event.tool_id, False, "Blocked by Barnaby")
-                        raise AgentError(problem)
+                        after = guard.aftermath(event.name, event.input, started_ns)
+                        raise AgentError(f"{problem} {after}" if after else problem)
                 yield event
 
     def _write_config(self, config: dict[str, Any]) -> None:

@@ -42,6 +42,7 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "category": "DeveloperTool",
+    "copyright": "Copyright (c) 2026 dallas8000-ops. All rights reserved.",
     "shortDescription": "Talk to Claude Code",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": {

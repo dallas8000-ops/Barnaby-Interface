@@ -117,6 +117,21 @@ describe("Composer draft review", () => {
     await userEvent.type(screen.getByLabelText("Type an instruction"), "run lint{Enter}");
     expect(sent).toEqual([{ type: "text_submit", text: "run lint" }]);
   });
+
+  it("explains Cursor's guard only while Cursor is the selected agent", async () => {
+    useApp.setState({ config: { workspace: "/proj", engine: "claude" } as never });
+    const { rerender } = render(<Composer />);
+    expect(screen.queryByTestId("cursor-guard-note")).toBeNull();
+    act(() => useApp.setState({ config: { workspace: "/proj", engine: "cursor" } as never }));
+    rerender(<Composer />);
+    const note = screen.getByTestId("cursor-guard-note");
+    expect(note).toHaveTextContent(/out-of-project or out-of-lane tool starts/);
+    expect(note.getAttribute("title")).toMatch(/whether that first write reached the disk/);
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    await userEvent.click(screen.getByRole("button", { name: "How it works" }));
+    expect(open).toHaveBeenCalledWith(expect.stringContaining("#how-cursor-is-kept-inside-the-same-safety-model"), "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
 });
 
 function PttHarness() {

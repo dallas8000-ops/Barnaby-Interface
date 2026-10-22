@@ -79,6 +79,22 @@ describe("TaskBoard", () => {
     expect(screen.getByText(/1 working/)).toBeInTheDocument();
   });
 
+  it("explains Cursor's guard on Cursor cards that are still working", () => {
+    useApp.setState({
+      tasks: [
+        task({ id: "a", title: "cursor job", engine: "cursor", status: "running" }),
+        task({ id: "b", title: "devin job", engine: "devin", status: "running" }),
+        task({ id: "c", title: "cursor done", engine: "cursor", status: "done", finished_at: 20 }),
+      ],
+    });
+    render(<TaskBoard />);
+    const a = screen.getByRole("listitem", { name: "Task: cursor job" });
+    expect(within(a).getByTestId("cursor-guard-note")).toHaveTextContent(/first write may land/);
+    expect(within(a).getByRole("button", { name: "How it works" })).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "Task: devin job" })).queryByTestId("cursor-guard-note")).toBeNull();
+    expect(within(screen.getByRole("listitem", { name: "Task: cursor done" })).queryByTestId("cursor-guard-note")).toBeNull();
+  });
+
   it("cancel, follow up and clear finished send the right commands", async () => {
     useApp.setState({ tasks: [task({ id: "a", status: "running" }), task({ id: "b", title: "done one", status: "done", result_text: "Full reply here." })] });
     render(<TaskBoard />);

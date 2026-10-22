@@ -48,7 +48,28 @@ export interface EngineInfo {
   reason?: string;
 }
 
-export type TaskStatus = "queued" | "running" | "needs_approval" | "done" | "failed" | "cancelled" | "interrupted";
+export type TaskStatus = "queued" | "running" | "verifying" | "needs_approval" | "done" | "failed" | "cancelled" | "interrupted";
+
+/** A command Barnaby runs itself to verify a task (engine: checks.CheckSpec). dir "" = the project root. */
+export interface CheckSpec {
+  run: string;
+  dir: string;
+}
+
+/** One check run (engine: checks.CheckResult). */
+export interface CheckResult {
+  command: string;
+  dir: string;
+  exit_code: number | null;
+  duration_s: number;
+  output: string;
+  passed: boolean;
+  timed_out: boolean;
+  error: string;
+}
+
+/** "" not checked yet, "passed", "failed", or "unverified" (no checks, or Devin). */
+export type Verification = "" | "passed" | "failed" | "unverified";
 
 /** A background task (engine: tasks.TaskRecord.public()). */
 export interface TaskView {
@@ -69,6 +90,17 @@ export interface TaskView {
   cli_session_id: string | null;
   turns: number;
   warning?: string;
+  checks?: CheckSpec[];
+  attempts?: number;
+  check_results?: CheckResult[];
+  verification?: Verification;
+  /** "worktree" (own git worktree and branch), "shared" (the project folder), "" (Devin, or older tasks). */
+  isolation?: "" | "worktree" | "shared";
+  worktree?: string;
+  branch?: string;
+  notice?: string;
+  /** Where the agent works, for worktree tasks. */
+  run_dir?: string;
 }
 
 /** A project folder the PC has opened. A tablet picks from these; only the PC adds to them. */
@@ -82,6 +114,8 @@ export interface ProjectInfo {
   /** Top-level folders, for task lanes. */
   folders: string[];
   saved_lanes: Record<string, string[]>;
+  /** The project's task checks from Settings. */
+  checks?: CheckSpec[];
 }
 
 export interface ApprovalRequiredEvent {
@@ -105,7 +139,7 @@ export interface StoredSession extends SessionSummary {
 export type RecentEvent = (
   | { type: "notice"; message: string }
   | { type: "error"; code: string; message: string }
-  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string }
+  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; verification?: Verification }
 ) & { nid: number; age_s: number };
 
 /** What's happening right now, in hello: a device that joins late or wakes up starts here. */
@@ -146,6 +180,8 @@ export interface TasksSnapshot {
   max_parallel: number;
   /** Undecided task approval cards, so a client that reconnects can still answer them. */
   approvals?: TaskApprovalEvent[];
+  /** The current project's checks from Settings. */
+  checks?: CheckSpec[];
 }
 
 export interface TemplateSummary {
@@ -181,6 +217,11 @@ export interface Config {
   max_parallel_tasks?: number;
   task_timeout_s?: number;
   task_lanes?: Record<string, Record<string, string[]>>;
+  task_checks?: Record<string, CheckSpec[]>;
+  task_check_retries?: number;
+  task_check_timeout_s?: number;
+  task_worktrees?: boolean;
+  task_worktree_parallel?: boolean;
 }
 
 export interface SessionSummary {
@@ -271,7 +312,7 @@ export type EngineEvent =
   | { type: "task_update"; task: TaskView }
   | { type: "task_text"; task_id: string; delta: string }
   | { type: "task_activity"; task_id: string; tool: string; path: string | null }
-  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; nid?: number }
+  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; verification?: Verification; nid?: number }
   | TaskApprovalEvent
   | { type: "task_approval_decided"; task_id: string; request_id: string; approved: boolean }
   // Voice feature events
@@ -322,7 +363,9 @@ export type Command =
   | { type: "audio_clip"; pcm_b64: string }
   | { type: "tablet_pair_start" }
   | { type: "tablet_revoke"; device_id: string }
-  | { type: "task_create"; engine: AgentEngine; instruction: string; lanes: string[]; title?: string | null; workspace?: string }
+  | { type: "task_create"; engine: AgentEngine; instruction: string; lanes: string[]; title?: string | null; checks?: CheckSpec[] | null; workspace?: string }
+  | { type: "task_discard"; task_id: string }
+  | { type: "task_open_folder"; task_id: string }
   | { type: "task_cancel"; task_id: string }
   | { type: "task_follow_up"; task_id: string; text: string }
   | { type: "task_clear" }
