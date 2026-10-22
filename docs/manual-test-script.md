@@ -84,7 +84,7 @@ Prerequisites: Cursor CLI installed and `agent login` done; a Devin API key save
 | 6.4 | Give the Claude task a follow-up that edits a file outside `docs` (e.g. `README.md`). | An approval card appears **on the task card**, not in the conversation. Saying "yes" doesn't approve it; clicking does, for exactly that file. | ☐ | ☐ | |
 | 6.5 | Select **Cursor** in the agent switch. | An info note appears under the switch: Cursor's guard stops a turn as an out-of-project/out-of-lane tool starts, so the first write may land. **How it works** opens the README section in the browser; hovering the note shows the full explanation. | ☐ | ☐ | |
 | 6.6 | Say "assign docs to Cursor: add a FAQ section to the usage guide". | Cursor task card shows *Cursor*, `docs/`, and the same guard note while it's working. Task completes; no cost shown. | ☐ | ☐ | |
-| 6.7 | Give a Cursor task in `docs` an instruction that edits `README.md` (outside its lane). | Task stops with *Stopped Cursor: this task tried to change … outside its folders*, followed by either "Barnaby stopped it before the file changed" or "Cursor had already saved that change … check the file". Check `README.md`: what's on disk matches what the message said. | ☐ | ☐ | |
+| 6.7 | Give a Cursor task in `docs` an instruction that edits `README.md` (outside its lane). | Task stops with *Stopped Cursor: this task tried to change … outside its folders*, followed by either "Barnaby stopped it before the file changed" or "Cursor had already saved that change … check the file". Check `README.md` in the task's worktree (**Open folder**; with worktrees off, in the project): what's on disk matches what the message said. Your own checkout's `README.md` is untouched. | ☐ | ☐ | |
 | 6.8 | In the conversation with Cursor selected, ask it to write `C:\bt\outside.txt`. | Turn stops with "it tried to change a file outside your project", plus whether the file was created. Check: the file's existence matches the message. | ☐ | ☐ | |
 | 6.9 | Say "task for Devin: add a health check endpoint". | Card shows *Devin*, a link to the Devin session; Devin's messages stream into the task; it ends when Devin finishes or is blocked. | ☐ | ☐ | |
 | 6.10 | Cancel a running task. | Only that task stops (Devin: Barnaby says the Devin session keeps running in Devin). | ☐ | ☐ | |
@@ -93,16 +93,26 @@ Prerequisites: Cursor CLI installed and `agent login` done; a Devin API key save
 
 ## 7. Task checks and per-task worktrees
 
-**Pending:** this feature is on branch `claude/verified-tasks-60d98b` (PR #1). Run this section only on a build that includes it; otherwise tick Fail with "not in this build".
+These shipped with PR #1 (merged into `master`). Use the git test repo from 0.2, with a test that currently passes.
 
 | # | Action | Expected | Pass | Fail | Notes |
 |---|---|---|:-:|:-:|---|
-| 7.1 | New task dialog: add a check (e.g. `pytest` or `npm test`), give Claude an instruction that should pass it. | Card goes Working → *Verifying* → Done, and shows the check result. | ☐ | ☐ | |
-| 7.2 | Add a check that fails at first (e.g. a test the task must make pass). | The task retries with the failure report (up to 2 retries by default), then succeeds or fails with the last check output. | ☐ | ☐ | |
-| 7.3 | With per-task worktrees on (default), run a Claude task. | The task runs in its own worktree on a `barnaby/task-…` branch; your main checkout is untouched until you merge. **Open folder** opens the worktree. | ☐ | ☐ | |
-| 7.4 | Run a Cursor task with an out-of-lane edit (as 6.7) with worktrees on. | Any edit that landed is in the task's worktree, not in your checkout. | ☐ | ☐ | |
-| 7.5 | **Discard** a finished task. | Worktree and its `barnaby/task-…` branch are removed; other branches untouched. | ☐ | ☐ | |
-| 7.6 | From the tablet, try to create a task with checks. | Refused (checks are PC only). | ☐ | ☐ | |
+| 7.1 | Settings → Background tasks → **Checks for this project**: add your test command (e.g. `pytest -q`, or `npm test` in its folder). | Saved. A command with shell syntax (`&&`, a pipe, a redirect) or one not on the auto-approve list is refused with a reason. | ☐ | ☐ | |
+| 7.2 | Start a Claude task whose work should keep the tests passing. | Card goes Working → *Checking* → Done; it shows each check as passed with its output and the number of check runs; Barnaby says "Its checks passed." | ☐ | ☐ | |
+| 7.3 | Start a task whose first attempt is likely to fail a check (e.g. add a failing test and ask the agent to make it pass without editing the test). | After a failing check, the agent gets the failing command and output in the same session and checks run again (up to 2 more times by default). It ends Done, or Failed with the last check output. | ☐ | ☐ | |
+| 7.4 | Remove the project's checks and run a task. | The finished card says **Unverified**. A Devin task always says Unverified. | ☐ | ☐ | |
+| 7.5 | **New task** on the PC: give one task its own check. | That task uses its own check instead of the project's. | ☐ | ☐ | |
+| 7.6 | With an uncommitted change in your checkout, run a Claude task. | The task runs in `%APPDATA%\Barnaby\worktrees\…` on a `barnaby/task-<id>-<title>` branch. Your checkout and its uncommitted change are untouched, and the card says the task can't see that change. | ☐ | ☐ | |
+| 7.7 | When it's done, check `git log barnaby/task-…` and **Open folder**. | The task's changes are committed on its branch (your hooks/signing apply); nothing is merged or pushed. Open folder shows the worktree in Explorer. | ☐ | ☐ | |
+| 7.8 | Run a Cursor task with an out-of-lane edit (as 6.7). | The stop message says whether the edit landed; if it did, it's in the task's worktree, not in your checkout. | ☐ | ☐ | |
+| 7.9 | **Follow up** on a finished worktree task, and restart Barnaby with one interrupted. | Both reuse the same worktree and agent session. | ☐ | ☐ | |
+| 7.10 | **Clear finished** with one merged-and-clean task and one with unmerged commits. | The merged one's worktree and branch are removed; the unmerged one stays on the board and Barnaby says why. | ☐ | ☐ | |
+| 7.11 | **Discard** a finished task, confirm. | Its worktree and `barnaby/task-…` branch are deleted; no other branch is touched. | ☐ | ☐ | |
+| 7.12 | Start two worktree tasks with overlapping folders, then turn on **Let worktree tasks with overlapping folders run at the same time** and repeat. | Off (default): the second waits. On: both run at once. | ☐ | ☐ | |
+| 7.13 | Add `task_worktree_setup` for the project in `config.json` (e.g. `npm ci` in `app`), start a new task. | The setup command runs once when the worktree is created; checks that need dependencies then pass. | ☐ | ☐ | |
+| 7.14 | Pick a project folder that isn't a git repository and run a task. | The task runs in the project folder itself and the card warns that there's no worktree. | ☐ | ☐ | |
+| 7.15 | Turn worktrees off in Settings and run a task. | The task runs in the project folder. | ☐ | ☐ | |
+| 7.16 | From the tablet, create a task (and try to give it checks). | The task uses the project's checks; the tablet can't set checks. **Open folder** isn't offered on the tablet. | ☐ | ☐ | |
 
 ## 8. Tablet pairing and approve-from-tablet
 

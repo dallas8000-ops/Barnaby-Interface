@@ -29,7 +29,7 @@ export function Sidebar({ onSettings, onProfile, onTasks }: { onSettings: () => 
 
   const remote = useApp((s) => s.role === "remote");
   const attention = useApp((s) => s.taskAttention);
-  const activeTasks = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "needs_approval").length);
+  const activeTasks = useApp((s) => s.tasks.filter((t) => t.status === "running" || t.status === "verifying" || t.status === "needs_approval").length);
   const inWorkspace = sessions.filter((s) => !workspace || s.workspace === workspace);
 
   return (

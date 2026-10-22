@@ -192,13 +192,33 @@ class Pair(_Cmd):
 _TASK_ID = r"^[A-Za-z0-9]{1,32}$"
 
 
+class CheckSpecIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    run: str = Field(min_length=1, max_length=300)
+    dir: str = Field(default="", max_length=200)
+
+
 class TaskCreate(_Cmd):
-    """Start a background task: one engine, one instruction, the folders it may change."""
+    """Start a background task: one engine, one instruction, the folders it may change.
+    ``checks``: None = the project's checks from Settings; a list = this task's own."""
     type: Literal["task_create"]
     engine: Literal["claude", "cursor", "devin"]
     instruction: str = Field(min_length=1, max_length=20_000)
     lanes: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=8)
     title: str | None = Field(default=None, max_length=120)
+    checks: list[CheckSpecIn] | None = Field(default=None, max_length=8)
+
+
+class TaskDiscard(_Cmd):
+    """Delete a finished task's worktree and branch, and the task (PC only; the UI confirms)."""
+    type: Literal["task_discard"]
+    task_id: str = Field(pattern=_TASK_ID)
+
+
+class TaskOpenFolder(_Cmd):
+    """Show the task's worktree (or the project folder) in Explorer on the PC."""
+    type: Literal["task_open_folder"]
+    task_id: str = Field(pattern=_TASK_ID)
 
 
 class TaskCancel(_Cmd):
@@ -234,7 +254,7 @@ Command = Annotated[
         NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
         ListTemplates, RunTemplate, SetSecret, DeleteSecret, AudioClip, TabletPairStart, TabletRevoke,
-        TaskCreate, TaskCancel, TaskFollowUp, TaskClear, TaskList,
+        TaskCreate, TaskCancel, TaskFollowUp, TaskClear, TaskList, TaskDiscard, TaskOpenFolder,
         ClaudeLogin, ClaudeLoginCancel, ClaudeAuthCheck,
     ],
     Field(discriminator="type"),

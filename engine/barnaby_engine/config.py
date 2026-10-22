@@ -67,6 +67,19 @@ class Config:
     max_parallel_tasks: int = 3
     task_timeout_s: int = 3600
     task_lanes: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    # Checks Barnaby runs itself before a local task counts as done ({workspace: [{"run":
+    # "pytest -q", "dir": "engine"}, ...]}). They must match safe_bash (see checks.py).
+    # After failing checks the agent gets this many automatic fix-up turns.
+    task_checks: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    task_check_retries: int = 2
+    task_check_timeout_s: int = 600
+    # Each local task in a git project works in its own worktree and branch. With
+    # task_worktree_parallel, worktree tasks whose folders overlap may run at the same time.
+    task_worktrees: bool = True
+    task_worktree_parallel: bool = False
+    # Commands run once in a new worktree before its agent starts (e.g. {"run": "npm ci",
+    # "dir": "app"}), per workspace. config.json only: they aren't limited to safe_bash.
+    task_worktree_setup: dict[str, list[dict[str, str]]] = field(default_factory=dict)
 
     # Continuous mode settings
     continuous_mode_enabled: bool = False
@@ -92,6 +105,7 @@ class Config:
         "tts_enabled", "tts_voice", "tts_speed", "max_spoken_chars",
         "review_transcripts", "save_voice_samples", "tablet_access", "tablet_port",
         "max_parallel_tasks", "task_timeout_s", "task_lanes",
+        "task_checks", "task_check_retries", "task_check_timeout_s", "task_worktrees", "task_worktree_parallel",
     })
 
     @classmethod
@@ -120,8 +134,19 @@ class Config:
             if key not in self.UI_MUTABLE or validator is None or not validator(value):
                 rejected.append(key)
                 continue
+            if key == "task_checks" and self.checks_problem(value):
+                rejected.append(key)  # not on the auto-approve list: the UI can't widen what runs unasked
+                continue
             setattr(self, key, float(value) if key in ("tts_speed", "continuous_mode_timeout") else value)
         return rejected
+
+    def checks_problem(self, value: dict[str, list[dict[str, str]]]) -> str | None:
+        from .checks import problem_with, specs_from
+        for specs in value.values():
+            problem = problem_with(specs_from(specs), list(self.safe_bash))
+            if problem:
+                return problem
+        return None
 
     def public(self) -> dict[str, Any]:
         d = asdict(self)
@@ -197,6 +222,25 @@ def _task_lanes(v: Any) -> bool:
     return True
 
 
+def _check_list(v: Any) -> bool:
+    if not isinstance(v, list) or len(v) > 8:
+        return False
+    for item in v:
+        if not isinstance(item, dict) or set(item) - {"run", "dir"}:
+            return False
+        run, folder = item.get("run"), item.get("dir", "")
+        if not (isinstance(run, str) and 0 < len(run.strip()) <= 300 and all(ord(c) >= 32 for c in run)):
+            return False
+        if not (isinstance(folder, str) and (folder in ("", ".") or _lane_path(folder))):
+            return False
+    return True
+
+
+def _task_checks(v: Any) -> bool:
+    return (isinstance(v, dict) and len(v) <= 20
+            and all(_short_str(ws, 1024) and _check_list(specs) for ws, specs in v.items()))
+
+
 _VALIDATORS: dict[str, Any] = {
     "workspace": lambda v: isinstance(v, str) and (v == "" or Path(v).is_dir()),
     "claude_model": lambda v: _short_str(v) and all(c.isalnum() or c in "-._[]" for c in v),
@@ -218,4 +262,9 @@ _VALIDATORS: dict[str, Any] = {
     "max_parallel_tasks": lambda v: _is_int(v) and 1 <= v <= 6,
     "task_timeout_s": lambda v: _is_int(v) and 300 <= v <= 14_400,
     "task_lanes": _task_lanes,
+    "task_checks": _task_checks,
+    "task_check_retries": lambda v: _is_int(v) and 0 <= v <= 5,
+    "task_check_timeout_s": lambda v: _is_int(v) and 30 <= v <= 3600,
+    "task_worktrees": lambda v: isinstance(v, bool),
+    "task_worktree_parallel": lambda v: isinstance(v, bool),
 }
