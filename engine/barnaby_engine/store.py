@@ -163,11 +163,21 @@ class Store:
         session["turns"] = turns
         return session
 
-    def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_sessions(self, limit: int = 50, workspace: str | None = None) -> list[dict[str, Any]]:
+        where, params = ("WHERE s.workspace=? ", (workspace, limit)) if workspace is not None else ("", (limit,))
         return self._rows(
             "SELECT s.id, s.title, s.workspace, s.engine, s.updated_at, "
             "(SELECT COUNT(*) FROM turns t WHERE t.session_id=s.id) AS turn_count "
-            "FROM sessions s ORDER BY s.updated_at DESC LIMIT ?", (limit,))
+            f"FROM sessions s {where}ORDER BY s.updated_at DESC LIMIT ?", params)
+
+    def workspaces(self) -> list[dict[str, Any]]:
+        """Every project folder in history (sessions and tasks), most recently used first,
+        with how many sessions each has."""
+        return self._rows(
+            "SELECT workspace, MAX(at) AS last_used, SUM(n) AS sessions FROM ("
+            " SELECT workspace, updated_at AS at, 1 AS n FROM sessions"
+            " UNION ALL SELECT workspace, created_at AS at, 0 AS n FROM tasks"
+            ") WHERE workspace != '' GROUP BY workspace ORDER BY last_used DESC")
 
     def add_turn(self, session_id: str, *, user_text: str, assistant_text: str,
                  tools: list[dict[str, Any]], status: str, cost_usd: float | None) -> str:

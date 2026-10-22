@@ -19,11 +19,13 @@ import contextlib
 import io
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
 import uuid
 import wave
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -38,8 +40,8 @@ from .claude_auth import ClaudeAuth
 from .config import Config, data_dir
 from .editors import EditorError, open_in_editor
 from .protocol import (Approve, Cancel, Command, DeleteVocab, Deny, DiscardDraft,
-                       GetVoiceProfile, ListDevices, ListSessions, LoadSession,
-                       ListTemplates, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
+                       GetVoiceProfile, ListDevices, ListProjects, ListSessions, LoadSession,
+                       ListTemplates, Resync, SelectProject, NewSession, OpenInEditor, Ping, PttStart, PttStop, Risk, RunTemplate,
                        AudioClip, DeleteSecret, SetConfig, SetSecret, State, StopSpeaking, TabletPairStart,
                        TabletRevoke, TaskCancel, TaskClear, TaskCreate, TaskFollowUp, TaskList,
                        TextSubmit, UpdateCorrection,
@@ -52,7 +54,8 @@ from .continuous import VoiceSegmenter
 from .cursor_agent import cursor_grantable
 from .remote import TabletBlocked
 from .safety import Grant, Scope, assess, grant_for, lane_of, redact_for_speech
-from .tasks import LaneError, TaskManager, parse_task_command, resolve_lane_words
+from .server import reply
+from .tasks import ACTIVE, LaneError, TaskManager, parse_task_command, resolve_lane_words
 from .speech import SpeechComposer
 from .store import Store
 from .templates import TemplateManager, match_template, template_steps
@@ -67,6 +70,13 @@ MIN_AUDIO_S = 0.35
 MIN_RMS = 0.004
 STT_TIMEOUT_S = 60.0  # generous for CPU + long clips; a stall past this is a fault, not work
 LEVEL_INTERVAL_S = 0.04
+# Snapshot sizes for clients that (re)connect: the newest turns of the open session, the
+# last notifications, and how much live text per running task.
+HELLO_TURNS = 40
+RECENT_EVENTS = 20
+RECENT_KINDS = frozenset({"notice", "error", "task_done"})
+TASK_TEXT_TAIL = 2_000
+MAX_PROJECTS = 30
 _YES_CORE = frozenset({"yes", "yeah", "yep", "approve", "approved", "confirm", "confirmed", "proceed", "ahead"})
 _NO_CORE = frozenset({"no", "nope", "deny", "denied", "don't", "dont", "reject", "cancel", "stop"})
 _FILLER = frozenset({"go", "do", "it", "please", "ok", "okay", "that", "sure", "thanks", "and", "just"})
@@ -142,6 +152,35 @@ class Draft:
     id: str
     shown_text: str
     audio: np.ndarray
+    heard: str = ""
+
+
+@dataclass
+class LiveTurn:
+    """The turn in flight, so a client that connects mid-turn sees it so far."""
+    turn_id: str
+    text: str
+    session_id: str
+    system: bool
+    engine: str
+    streamed: list[str] = field(default_factory=list)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+
+    def public(self) -> dict[str, Any]:
+        return {"turn_id": self.turn_id, "text": self.text, "session_id": self.session_id, "system": self.system,
+                "engine": self.engine, "assistant": "".join(self.streamed), "tools": [dict(t) for t in self.tools]}
+
+
+def project_key(path: str) -> str:
+    """Compare project folders the way Windows does (case, slashes, trailing separators)."""
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _remember(seen: "OrderedDict[str, Any]", key: str, value: Any, limit: int = 500) -> None:
+    seen[key] = value
+    seen.move_to_end(key)
+    while len(seen) > limit:
+        seen.popitem(last=False)
 
 
 @dataclass
@@ -154,6 +193,7 @@ class PendingApproval:
     voice_approvable: bool
     grant: Grant | None
     decision: bool | None = None
+    card: dict[str, Any] = field(default_factory=dict)  # the approval_required event, for snapshots
 
 
 @dataclass
@@ -237,7 +277,17 @@ class Orchestrator:
         self._templates = templates or TemplateManager()
         self._workflows = workflows  # WorkflowEngine: user-saved workflows run like templates
         self._chain: ChainRun | None = None
-        self.emit = emit
+        # Every broadcast goes through _broadcast, which keeps what a (re)connecting client
+        # needs: recent notifications and each running task's latest activity.
+        self._emit_raw = emit
+        self.emit: Emit = self._broadcast
+        self._recent: deque[tuple[float, dict[str, Any]]] = deque(maxlen=RECENT_EVENTS)
+        self._nid = int(time.time() * 1000)  # notification ids keep rising across restarts
+        self._task_live: dict[str, dict[str, Any]] = {}
+        self._live: LiveTurn | None = None
+        # Two devices, one engine: an approval or a review draft is acted on once.
+        self._decided: OrderedDict[str, bool] = OrderedDict()
+        self._closed_drafts: OrderedDict[str, bool] = OrderedDict()
         self._transcriber_factory = transcriber_factory
         self._speaker_factory = speaker_factory
         # Cloud agents' API keys. Tests get an in-memory vault, never the real Windows store.
@@ -251,7 +301,7 @@ class Orchestrator:
         self._remote_listeners = 0
         # Background tasks (task board): each gets its own agent from task_agent_factory.
         self.tasks = TaskManager(store=store, config=config, agent_factory=task_agent_factory,
-                                 engine_available=self._engine_available, emit=emit,
+                                 engine_available=self._engine_available, emit=self._broadcast,
                                  speak=lambda text: self._enqueue_speech([text], self._speech_gen),
                                  on_forget=task_forget)
 
@@ -297,6 +347,7 @@ class Orchestrator:
                                  f"The old file is kept at {damaged}.")
         self._speech_task = asyncio.create_task(self._speech_worker())
         self.tasks.load()
+        self._remember_project(self.config.workspace)
         self._refresh_project_terms()
         asyncio.create_task(self._preload())
         asyncio.create_task(self._claude_check())
@@ -315,11 +366,63 @@ class Orchestrator:
             self._speech_task.cancel()
 
     async def hello(self) -> dict[str, Any]:
+        """The full snapshot a client starts from; every later event is a delta on it.
+        Must not await (see server.Bridge): it's taken in the same step the client joins."""
         return ev("hello", state=self.state.value, config=self.config.public(), engines=self.engines(),
                   templates=self._template_summaries(), handsfree=self._hf is not None, secrets=self.vault.status(), tablet=self._tablet_status(),
                   session_id=self.session_id, speaking=self._speaking,
                   sessions=self.store.list_sessions(), components=self._components,
-                  tasks=self.tasks.snapshot(), claude_auth=self._claude_state)
+                  tasks=self.tasks.snapshot(), claude_auth=self._claude_state,
+                  projects=self.projects(), live=self._live_snapshot())
+
+    def _live_snapshot(self) -> dict[str, Any]:
+        """What's happening right now: the open conversation, the turn in flight, undecided
+        approvals, the running chain, a review draft, task activity and recent notifications."""
+        session = None
+        if self.session_id:
+            try:
+                session = self.store.get_session(self.session_id)
+            except sqlite3.Error:
+                log.exception("couldn't read the open session for a snapshot")
+            if session:
+                session["turns"] = session["turns"][-HELLO_TURNS:]
+        group = self._approvals
+        chain = self._chain
+        draft = next(reversed(self._drafts.values()), None) if self._drafts else None
+        now = time.time()
+        return {
+            "session": session,
+            "turn": self._live.public() if self._live else None,
+            "approvals": [p.card for p in group.items.values() if p.decision is None and p.card] if group else [],
+            "chain": {"chain_id": chain.id, "name": chain.name, "steps": list(chain.steps), "index": chain.index}
+            if chain else None,
+            "draft": {"draft_id": draft.id, "heard": draft.heard, "text": draft.shown_text}
+            if draft and self.config.review_transcripts else None,
+            "task_live": {tid: dict(v) for tid, v in self._task_live.items()},
+            "recent": [{**e, "age_s": round(max(0.0, now - at), 1)} for at, e in self._recent],
+        }
+
+    async def _broadcast(self, event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        if kind in RECENT_KINDS:
+            self._nid += 1
+            event = {**event, "nid": self._nid}
+            self._recent.append((time.time(), event))
+        elif kind == "task_activity":
+            live = self._task_live.setdefault(event["task_id"], {})
+            live.update(tool=event.get("tool"), path=event.get("path"))
+        elif kind == "task_text":
+            live = self._task_live.setdefault(event["task_id"], {})
+            live["text"] = (live.get("text", "") + event.get("delta", ""))[-TASK_TEXT_TAIL:]
+        elif kind == "task_update":
+            task = event.get("task") or {}
+            if task.get("status") != "running":
+                self._task_live.pop(task.get("id", ""), None)
+        elif kind == "tasks":
+            running = {t["id"] for t in event.get("items", []) if t.get("status") == "running"}
+            for tid in [t for t in self._task_live if t not in running]:
+                del self._task_live[tid]
+        await self._emit_raw(event)
 
     def take_notices(self) -> list[str]:
         """Startup notices (e.g. a repaired database) to show once, to the first window that connects."""
@@ -366,20 +469,22 @@ class Orchestrator:
             case TextSubmit(text=text, draft_id=draft_id):
                 await self._submit(text, draft_id)
             case DiscardDraft(draft_id=draft_id):
-                self._drafts.pop(draft_id, None)
+                await self._close_draft(draft_id)
                 await self._set_state(State.IDLE)
             case Cancel():
                 await self._cancel_all()
             case StopSpeaking():
                 self._stop_speaking()
             case Approve(request_id=rid):
-                if not await self.tasks.decide(rid, True):
-                    await self._decide(rid, True)
+                await self._approve_or_deny(rid, True)
             case Deny(request_id=rid):
-                if not await self.tasks.decide(rid, False):
-                    await self._decide(rid, False)
-            case TaskCreate(engine=engine, instruction=instruction, lanes=lanes, title=title):
-                await self.tasks.create(engine, instruction, list(lanes), title)
+                await self._approve_or_deny(rid, False)
+            case TaskCreate(engine=engine, instruction=instruction, lanes=lanes, title=title, workspace=ws):
+                target = self.config.workspace if ws is None else self._known_project(ws)
+                if target is None:
+                    await reply(ev_error("not_allowed", _NOT_OPENED), self.emit)
+                    return
+                await self.tasks.create(engine, instruction, list(lanes), title, workspace=target)
             case TaskCancel(task_id=tid):
                 await self.tasks.cancel(tid)
             case TaskFollowUp(task_id=tid, text=text):
@@ -394,8 +499,22 @@ class Orchestrator:
                 await self.emit(ev("session_loaded", session=None))
             case LoadSession(session_id=sid):
                 await self._load_session(sid)
-            case ListSessions():
+            case ListSessions(workspace=None):
                 await self.emit(ev("sessions", items=self.store.list_sessions()))
+            case ListSessions(workspace=ws):
+                # Browsing another project's history is this client's business: reply, don't broadcast.
+                target = self._known_project(ws or "")
+                if target is None:
+                    await reply(ev_error("not_allowed", _NOT_OPENED), self.emit)
+                else:
+                    await reply(ev("sessions", items=self.store.list_sessions(200, target), workspace=target),
+                                self.emit)
+            case ListProjects():
+                await reply(ev("projects", items=self.projects()), self.emit)
+            case SelectProject(workspace=ws):
+                await self._select_project(ws)
+            case Resync():
+                await reply(await self.hello(), self.emit)
             case SetConfig(values=values):
                 await self._set_config(values)
             case ListTemplates():
@@ -537,7 +656,8 @@ class Orchestrator:
             action = classify_draft_command(shown)
             if action:
                 if action == "discard":
-                    self._drafts.clear()
+                    for draft_id in list(self._drafts):
+                        await self._close_draft(draft_id)
                 await self.emit(ev("draft_command", action=action))
                 await self._set_state(resting)
                 return
@@ -550,7 +670,7 @@ class Orchestrator:
                 await self._voice_decision(decision)
                 return
 
-        draft = Draft(id=uuid.uuid4().hex[:12], shown_text=shown, audio=audio)
+        draft = Draft(id=uuid.uuid4().hex[:12], shown_text=shown, audio=audio, heard=raw)
         self._drafts = {draft.id: draft}  # only the latest draft is live
         review = self.config.review_transcripts
         await self.emit(ev("transcript", draft_id=draft.id, heard=raw, text=shown, review=review))
@@ -564,9 +684,17 @@ class Orchestrator:
         text = text.strip()
         if not text:
             return
+        draft: Draft | None = None
+        if draft_id:
+            if draft_id in self._closed_drafts:
+                # The PC and a tablet both show the review draft; only the first send counts.
+                await reply(ev("notice", message="That was already sent or discarded, maybe on another device."),
+                            self.emit)
+                return
+            draft = self._drafts.get(draft_id)
+            await self._close_draft(draft_id)
         task = parse_task_command(text)
         if task is not None:
-            self._drafts.pop(draft_id, None) if draft_id else None
             await self._voice_task(*task)
             return
         routed, rest = route_engine(text)
@@ -575,11 +703,9 @@ class Orchestrator:
                 if not await self._switch_engine(routed):
                     return
             if not rest:
-                self._drafts.pop(draft_id, None) if draft_id else None
                 await self._set_state(State.IDLE)
                 return
             text = rest
-        draft = self._drafts.pop(draft_id, None) if draft_id else None
         if draft is not None:
             promoted = self.profile.learn(draft.shown_text, text)
             for heard, meant in promoted:
@@ -735,6 +861,7 @@ class Orchestrator:
             await self.emit(ev("sessions", items=self.store.list_sessions()))
         self.session_engine = engine
         turn_id = uuid.uuid4().hex[:12]
+        self._live = LiveTurn(turn_id, display_text, self.session_id, system_note, engine)
         await self.emit(ev("turn_start", turn_id=turn_id, text=display_text,
                            session_id=self.session_id, system=system_note, engine=engine))
         self._turn_task = asyncio.create_task(self._run_turn(turn_id, prompt, display_text, grant))
@@ -744,8 +871,10 @@ class Orchestrator:
         await self._set_state(State.THINKING)
         self._cancel_requested = False
         composer = SpeechComposer(self.config.max_spoken_chars)
-        tools: list[dict[str, Any]] = []
-        streamed: list[str] = []
+        live = self._live if self._live is not None and self._live.turn_id == turn_id else LiveTurn(
+            turn_id, display_text, self.session_id or "", False, self.config.engine)
+        tools: list[dict[str, Any]] = live.tools      # shared with the snapshot
+        streamed: list[str] = live.streamed
         result: TurnResult | None = None
         status = "ok"
         gen = self._speech_gen
@@ -788,6 +917,7 @@ class Orchestrator:
             status = "cancelled"
             await self.emit(ev("turn_end", turn_id=turn_id, status=status))
             self._persist(display_text, "".join(streamed), tools, status, None)
+            self._end_live(turn_id)
             if self._cancel_requested and asyncio.current_task() and not asyncio.current_task().cancelling():
                 return
             raise
@@ -809,6 +939,7 @@ class Orchestrator:
                            cost_usd=result.cost_usd if result else None,
                            duration_ms=result.duration_ms if result else None))
         self._persist(display_text, text, tools, status, result.cost_usd if result else None)
+        self._end_live(turn_id)  # same step as the save: a snapshot has it in history or live, never neither
         if self._claude_auth is not None and self.session_engine == "claude" and result:
             if result.is_error and needs_sign_in(text):
                 await self._claude_set("expired", "Claude rejected your sign-in. Sign in again.")
@@ -887,13 +1018,14 @@ class Orchestrator:
                 if grant is not None:
                     grant = Grant(allow=grant.allow, add_dirs=grant.add_dirs, open_lanes=(lane,))
             rid = uuid.uuid4().hex[:12]
+            card = ev("approval_required", turn_id=turn_id, request_id=rid,
+                      tool_name=denial.tool_name, summary=summary, risk=a.risk.value,
+                      voice_approvable=a.voice_approvable and grant is not None,
+                      grantable=grant is not None,
+                      detail=_approval_detail(denial.tool_name, denial.tool_input))
             group.items[rid] = PendingApproval(rid, denial.tool_name, denial.tool_input, summary,
-                                               a.risk, a.voice_approvable, grant)
-            await self.emit(ev("approval_required", turn_id=turn_id, request_id=rid,
-                               tool_name=denial.tool_name, summary=summary, risk=a.risk.value,
-                               voice_approvable=a.voice_approvable and grant is not None,
-                               grantable=grant is not None,
-                               detail=_approval_detail(denial.tool_name, denial.tool_input)))
+                                               a.risk, a.voice_approvable, grant, card=card)
+            await self.emit(card)
         self._approvals = group
         await self._set_state(State.AWAITING_APPROVAL)
         n = len(group.items)
@@ -913,15 +1045,38 @@ class Orchestrator:
             self._enqueue_speech(["Some items need you to confirm on screen."], self._speech_gen)
             await self._set_state(State.AWAITING_APPROVAL)
 
+    async def _approve_or_deny(self, request_id: str, approve: bool) -> None:
+        """One decision per request, whichever device (or voice) gets there first. The
+        check and the record happen in one step, so a second decision arriving at the
+        same moment is refused, not applied on top of the first."""
+        if request_id in self._decided:
+            await self._decision_refused(request_id)
+        elif self.tasks.owns_request(request_id):
+            _remember(self._decided, request_id, approve)
+            await self.tasks.decide(request_id, approve)
+        else:
+            await self._decide(request_id, approve)
+
+    async def _decision_refused(self, request_id: str) -> None:
+        """Tell the device that lost the race, and resend it the current state so its stale
+        card closes even if it missed the broadcast."""
+        message = ("That was already decided, maybe on another device." if request_id in self._decided
+                   else "That request isn't waiting for a decision any more.")
+        await reply(ev_error("already_decided", message), self.emit)
+        await reply(await self.hello(), self.emit)
+
     async def _decide(self, request_id: str, approve: bool) -> None:
         group = self._approvals
-        if not group or request_id not in group.items:
+        item = group.items.get(request_id) if group else None
+        if group is None or item is None or item.decision is not None:
+            await self._decision_refused(request_id)
             return
-        item = group.items[request_id]
-        if approve and item.grant is None:
+        refused = approve and item.grant is None
+        item.decision = approve and not refused
+        _remember(self._decided, request_id, item.decision)  # before any await: a racing decision sees it
+        approve = item.decision
+        if refused:
             await self.emit(ev_error("approval", "That action can't be approved narrowly; ask me to do it a different way."))
-            approve = False
-        item.decision = approve
         await self.emit(ev("approval_decided", request_id=request_id, approved=approve))
         if not group.done():
             return
@@ -1065,8 +1220,11 @@ class Orchestrator:
         if session["workspace"] and Path(session["workspace"]).is_dir() and session["workspace"] != self.config.workspace:
             self.config.workspace = session["workspace"]
             self.config.save()
+            self._remember_project(self.config.workspace)
             self._refresh_project_terms()
             await self.emit(ev("config", config=self.config.public()))
+            await self.emit(self.tasks.snapshot())  # folders and saved lanes follow the project
+            await self.emit(ev("projects", items=self.projects()))
         await self.emit(ev("session_loaded", session=session))
 
     async def _set_config(self, values: dict[str, Any]) -> None:
@@ -1083,6 +1241,7 @@ class Orchestrator:
         if before["workspace"] != after["workspace"]:
             await self._cancel_all()
             self.session_id = self.claude_session_id = self.session_engine = None
+            self._remember_project(self.config.workspace)
             self._refresh_project_terms()
             await self.emit(ev("session_loaded", session=None))
         if self._transcriber_factory and (before["whisper_model"], before["whisper_device"]) != (after["whisper_model"], after["whisper_device"]):
@@ -1098,6 +1257,8 @@ class Orchestrator:
         if any(before.get(k) != after.get(k) for k in task_keys):
             await self.emit(self.tasks.snapshot())
             await self.tasks.pump()  # a higher limit may let queued tasks start
+        if before["workspace"] != after["workspace"] or before.get("task_lanes") != after.get("task_lanes"):
+            await self.emit(ev("projects", items=self.projects()))
         if (before.get("tablet_access"), before.get("tablet_port")) != (after.get("tablet_access"), after.get("tablet_port")):
             await self._apply_tablet()
 
@@ -1112,23 +1273,93 @@ class Orchestrator:
     # ------------------------------------------------------------ tablet access
     def remote_check(self, cmd: Command) -> str | None:
         """Extra checks for tablet commands that need engine state (the hub has already
-        applied the role policy). Opening a session switches to its project folder,
-        which only the PC may do, so a tablet can open sessions of the current project only."""
-        # Tasks of another project: the tablet can see and cancel them, but only the PC
-        # follows them up or approves their actions (same rule as opening its sessions).
+        applied the role policy). A tablet works in every project the PC has opened (its
+        sessions, tasks and approvals), but it can't point Barnaby at any other folder:
+        choosing a new folder stays on the PC. The handlers repeat these checks for every
+        client; refusing here just answers the tablet before anything runs."""
+        named = None
+        if isinstance(cmd, (SelectProject, ListSessions, TaskCreate)):
+            named = cmd.workspace
+        if named is not None and self._known_project(named) is None:
+            return _NOT_OPENED
         if isinstance(cmd, TaskFollowUp):
             t = self.tasks.tasks.get(cmd.task_id)
-            if t is not None and t.workspace != self.config.workspace:
-                return "That task belongs to another project. Follow it up on the PC."
-        if isinstance(cmd, (Approve, Deny)):
-            t = self.tasks.task_of_request(cmd.request_id)
-            if t is not None and t.workspace != self.config.workspace:
-                return "That task belongs to another project. Approve it on the PC."
-        if isinstance(cmd, LoadSession):
-            session = self.store.get_session(cmd.session_id)
-            if session and session.get("workspace") and session["workspace"] != self.config.workspace:
-                return "That session belongs to another project. Open it on the PC."
+            if t is not None and self._known_project(t.workspace) is None:
+                return _NOT_OPENED
         return None
+
+    # ------------------------------------------------------------ projects
+    def _project_rows(self) -> list[dict[str, Any]]:
+        try:
+            return self.store.workspaces()
+        except sqlite3.Error:
+            log.exception("couldn't list projects from history")
+            return []
+
+    def known_projects(self, rows: list[dict[str, Any]] | None = None) -> list[str]:
+        """Project folders the PC has opened, current first: the current one, the ones
+        picked on the PC, and every project in history. Only folders that still exist."""
+        seen: dict[str, str] = {}
+        recent = self.config.recent_projects if isinstance(self.config.recent_projects, list) else []
+        history = [r["workspace"] for r in (self._project_rows() if rows is None else rows)]
+        for path in [self.config.workspace, *recent, *history]:
+            if isinstance(path, str) and path:
+                seen.setdefault(project_key(path), path)
+        return [p for p in seen.values() if Path(p).is_dir()][:MAX_PROJECTS]
+
+    def _known_project(self, path: str) -> str | None:
+        """The PC's own spelling of ``path`` if it's a known project, else None. Never the
+        client's string: a tablet can only pick, not name, a folder."""
+        key = project_key(path) if path else ""
+        return next((p for p in self.known_projects() if project_key(p) == key), None)
+
+    def projects(self) -> list[dict[str, Any]]:
+        rows = self._project_rows()
+        stats = {project_key(r["workspace"]): r for r in rows}
+        current = project_key(self.config.workspace) if self.config.workspace else None
+        out = []
+        for path in self.known_projects(rows):
+            key = project_key(path)
+            row = stats.get(key, {})
+            out.append({"path": path, "name": Path(path).name or path, "current": key == current,
+                        "sessions": int(row.get("sessions") or 0), "last_used": row.get("last_used"),
+                        "active_tasks": sum(1 for t in self.tasks.tasks.values()
+                                            if t.status in ACTIVE and project_key(t.workspace) == key),
+                        "folders": TaskManager.folders(path),
+                        "saved_lanes": dict(self.config.task_lanes.get(path, {}))})
+        return out
+
+    def _remember_project(self, path: str) -> None:
+        if not path:
+            return
+        recent = self.config.recent_projects if isinstance(self.config.recent_projects, list) else []
+        updated = [path, *(p for p in recent if isinstance(p, str) and project_key(p) != project_key(path))]
+        updated = updated[:MAX_PROJECTS]
+        if updated != recent:
+            self.config.recent_projects = updated
+            self.config.save()
+
+    async def _select_project(self, path: str) -> None:
+        target = self._known_project(path)
+        if target is None:
+            await reply(ev_error("not_allowed", _NOT_OPENED), self.emit)
+        elif target != self.config.workspace:
+            await self._set_config({"workspace": target})
+        else:
+            await self.emit(ev("projects", items=self.projects()))
+
+    # ------------------------------------------------------------ shared live state
+    def _end_live(self, turn_id: str) -> None:
+        if self._live is not None and self._live.turn_id == turn_id:
+            self._live = None
+
+    async def _close_draft(self, draft_id: str) -> None:
+        """A review draft is used once. Both devices show it; tell them it's gone."""
+        self._drafts.pop(draft_id, None)
+        if draft_id in self._closed_drafts:
+            return
+        _remember(self._closed_drafts, draft_id, True, limit=100)
+        await self.emit(ev("draft_closed", draft_id=draft_id))
 
     def set_remote_listeners(self, count: int) -> None:
         """Called by the hub as tablets connect and leave."""
@@ -1345,6 +1576,9 @@ class Orchestrator:
             w.writeframes(pcm)
         path.write_bytes(buf.getvalue())
         self.store.add_voice_sample(str(path), draft.shown_text, final_text)
+
+
+_NOT_OPENED = "Barnaby hasn't opened that folder on the PC. Open it there first; then any device can use it."
 
 
 def _approval_detail(tool_name: str, tool_input: dict[str, Any]) -> str:

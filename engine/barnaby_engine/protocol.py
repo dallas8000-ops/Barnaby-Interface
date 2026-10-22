@@ -82,7 +82,25 @@ class LoadSession(_Cmd):
 
 
 class ListSessions(_Cmd):
+    """All recent sessions, or (``workspace`` set) the sessions of one project Barnaby knows."""
     type: Literal["list_sessions"]
+    workspace: str | None = Field(default=None, min_length=1, max_length=1024)
+
+
+class ListProjects(_Cmd):
+    """The projects the PC has opened. A tablet picks from these; it can't name a new folder."""
+    type: Literal["list_projects"]
+
+
+class SelectProject(_Cmd):
+    """Point the conversation at one of the projects the PC has already opened."""
+    type: Literal["select_project"]
+    workspace: str = Field(min_length=1, max_length=1024)
+
+
+class Resync(_Cmd):
+    """Ask for a fresh snapshot (a tablet waking up). Answered to the sender only, with ``hello``."""
+    type: Literal["resync"]
 
 
 class SetConfig(_Cmd):
@@ -199,6 +217,8 @@ class TaskCreate(_Cmd):
     instruction: str = Field(min_length=1, max_length=20_000)
     lanes: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=8)
     title: str | None = Field(default=None, max_length=120)
+    # One of the projects the PC has opened (None = the current one). Checked by the engine.
+    workspace: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 class TaskCancel(_Cmd):
@@ -231,7 +251,7 @@ def parse_pair(raw: str | bytes) -> Pair:
 Command = Annotated[
     Union[
         Auth, PttStart, PttStop, TextSubmit, Cancel, StopSpeaking, Approve, Deny,
-        NewSession, LoadSession, ListSessions, SetConfig, Ping, DiscardDraft,
+        NewSession, LoadSession, ListSessions, ListProjects, SelectProject, Resync, SetConfig, Ping, DiscardDraft,
         GetVoiceProfile, UpdateCorrection, DeleteVocab, OpenInEditor, ListDevices,
         ListTemplates, RunTemplate, SetSecret, DeleteSecret, AudioClip, TabletPairStart, TabletRevoke,
         TaskCreate, TaskCancel, TaskFollowUp, TaskClear, TaskList,

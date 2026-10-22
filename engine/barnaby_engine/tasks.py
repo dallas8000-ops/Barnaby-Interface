@@ -379,8 +379,11 @@ class TaskManager:
         return any(request_id in g for g in self._groups.values())
 
     # ------------------------------------------------------------ commands
-    async def create(self, engine: str, instruction: str, lanes: list[str], title: str | None) -> TaskRecord | None:
-        ws = self.config.workspace
+    async def create(self, engine: str, instruction: str, lanes: list[str], title: str | None,
+                     *, workspace: str | None = None) -> TaskRecord | None:
+        """``workspace``: the project to work in (default: the current one). The caller has
+        already checked it's a project the PC opened."""
+        ws = workspace or self.config.workspace
         instruction = instruction.strip()
         problem = None
         if self._factory is None:

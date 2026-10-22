@@ -114,9 +114,24 @@ the tablet and are read by the tablet's own voice. While a tablet is connected t
 quiet. You can approve and decline from the tablet under the same rules as the PC. The PC
 window and a tablet can be connected at the same time.
 
-**What stays on the PC:** the project folder, API keys, the microphone, hands-free, tablet
-access and pairing. The tablet can't change them, and the engine enforces this, not just the
-UI. A tablet can open past sessions of the current project only.
+**The PC and the tablet share everything.** Both show the same conversation, the same task
+board and the same live activity, and an action on either one shows up on the other at once.
+From the tablet you can:
+- switch between the projects you've opened on the PC (the project picker in the sidebar), and
+  browse and open past sessions of any of them;
+- start tasks in any of those projects, with their folders and saved lanes, and follow them up,
+  cancel them, and approve or decline their requests;
+- pick up where the PC is. A tablet that connects or wakes up mid-turn gets the conversation,
+  the reply so far, any card waiting for approval, chain progress, task activity, and the
+  notifications it missed.
+
+Each approval and each voice draft counts once. If the PC and the tablet answer the same card,
+the first answer wins, the card closes on both, and the other device is told it was already
+decided. The engine enforces this, so a decision can't be applied twice.
+
+**What stays on the PC:** choosing a new project folder, API keys, the microphone, hands-free,
+tablet access and pairing. The tablet picks only from projects the PC has already opened; it
+can't type in a folder path. The engine enforces all of this, not just the UI.
 
 **Removing a tablet:** Settings → Tablet access → **Remove**. Its connection closes at once and
 its key stops working.

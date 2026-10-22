@@ -341,3 +341,35 @@ test("task board: a typed task command starts a background task and the conversa
   await expect(t).toHaveAttribute("data-status", "done", { timeout: 15_000 });
   await page.getByRole("button", { name: "Clear finished" }).click();
 });
+
+test("tablet parity: a tablet that joins late sees the PC's pending card and the conversation, and its decision closes the card on the PC", async ({ page, browser }) => {
+  // The PC starts a turn that stops for approval before any tablet is connected.
+  await fresh(page);
+  await page.getByLabel("Type an instruction").fill("run the tests and fix anything failing");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("approval")).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByText(`On, port ${TABLET_PORT}`)).toBeVisible({ timeout: 15_000 });
+  await dialog.getByRole("button", { name: "Pair a tablet" }).click();
+  const link = await dialog.locator("p.font-mono").innerText();
+  await page.keyboard.press("Escape");
+
+  const tablet = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 800 }, hasTouch: true });
+  const t = await tablet.newPage();
+  await t.goto(`https://127.0.0.1:${TABLET_PORT}/${new URL(link).hash}`);
+
+  // The snapshot it starts from: the same conversation and the card that's waiting.
+  await expect(t.getByTestId("conversation")).toContainText("All 42 tests pass now", { timeout: 15_000 });
+  await expect(t.getByTestId("approval")).toBeVisible();
+  await t.getByRole("button", { name: "Decline" }).click();
+  await expect(page.getByTestId("approval")).toHaveCount(0, { timeout: 10_000 }); // decided once, closed everywhere
+  await expect(page.getByTestId("conversation")).toContainText("I won't push", { timeout: 15_000 });
+  await expect(t.getByTestId("conversation")).toContainText("I won't push");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await dialog.getByRole("button", { name: /^Remove / }).click();
+  await expect(t.getByTestId("pair-screen")).toBeVisible({ timeout: 10_000 });
+  await tablet.close();
+});
