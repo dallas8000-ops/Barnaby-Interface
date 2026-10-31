@@ -168,3 +168,38 @@ task and conversation scopes; task grants; Cursor guard lanes; TaskManager with 
 restart → interrupted, speech on finish, remote permissions). UI (Vitest): store reducers, board,
 dialog validation. E2E (Playwright, mock engine): assign two tasks, see both run, approve one, see
 completion toasts.
+
+## Addendum (2026-10-20): verified tasks and per-task worktrees
+
+Supersedes two v1 non-goals. The user now wants worktrees (orchestrator roadmap steps 1 and 2:
+"deterministic checks gate task success", "per-task git worktree isolation").
+
+**Checks gate success.** Per-project check commands (`task_checks`, {workspace: [{run, dir}]}),
+or a task's own (`task_create.checks`, PC only). After a local task's turn ends cleanly, the
+task goes to `verifying` (active: holds its slot and lanes) and Barnaby runs each check in the
+task's folder (`checks.py`: argv, no shell, shell metacharacters refused, must match `safe_bash`
+so the UI can't widen what runs unasked; `CI=true`; per-check timeout; output tail kept). All
+pass: `done`, verification `passed`. A failure: the failing commands and output go back to the
+same agent session as a retry turn, up to `task_check_retries` (2); then `failed` with the
+output in `error`. No checks: `done`, verification `unverified`. Devin: always `unverified`.
+New record fields `checks`, `attempts` (check runs since the last instruction), `check_results`,
+`verification`; stored via an additive migration.
+
+**Worktree per local task.** A Claude/Cursor task created in a git repository (with commits) gets
+`isolation: worktree`, branch `barnaby/task-<id8>-<slug>` and a worktree at
+`<data dir>/worktrees/<repo>-<hash8>/<task id>`, created from HEAD when its run starts. Outside the
+repo so test discovery, globbing, IDE indexing and agents' searches of the project never see the
+copies. The agent's `workspace` (cwd), Claude's `Edit(./lane/**)` rules, the Cursor guard, task
+grants and the checks are all relative to the worktree (plus the project's prefix when the
+project is a subfolder of the repo). Done tasks are committed to their branch; Barnaby never
+merges or pushes. Follow-ups and restarts reuse the path (the branch is checked out again if the
+folder went missing), so the CLI session resumes. Discard removes the worktree and the branch
+(PC only, confirmed in the UI). Clear finished removes them only when the worktree is clean and
+no commit is unique to the branch; otherwise the task stays on the board with a notice.
+Non-git projects, or `task_worktrees: false`: `isolation: shared`, today's behaviour, with a
+card warning when it wasn't the user's choice. Tasks from before this change stay shared.
+
+Worktree tasks don't hold the conversation's busy lanes (they never touch the project folder).
+Lane overlap scheduling still applies to them by default; `task_worktree_parallel` lets
+overlapping worktree tasks run at once (cost: merge conflicts later). Optional
+`task_worktree_setup` commands (config.json only) prepare a new worktree (`npm ci`).

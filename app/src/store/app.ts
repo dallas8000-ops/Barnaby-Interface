@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { ConnectionStatus } from "../lib/engine";
 import type {
   AgentEngine,
+  CheckSpec,
   ComponentStatus,
   Config,
   Correction,
@@ -107,6 +108,8 @@ export interface AppState {
   taskApprovals: TaskApproval[];
   taskFolders: string[];
   savedLanes: Record<string, string[]>;
+  /** The current project's check commands (Settings → Background tasks). */
+  projectChecks: CheckSpec[];
   maxParallel: number;
   /** Finished tasks and approval requests since the board was last looked at. */
   taskAttention: number;
@@ -158,6 +161,7 @@ export const initialState: AppState = {
   taskApprovals: [],
   taskFolders: [],
   savedLanes: {},
+  projectChecks: [],
   maxParallel: 3,
   taskAttention: 0,
   voiceProfile: null,
@@ -215,7 +219,7 @@ const toTaskApproval = (e: TaskApprovalEvent): TaskApproval => ({
 
 function applySnapshot(
   s: AppState,
-  snap: { items: TaskView[]; folders: string[]; saved_lanes: Record<string, string[]>; max_parallel: number; approvals?: TaskApprovalEvent[] },
+  snap: { items: TaskView[]; folders: string[]; saved_lanes: Record<string, string[]>; max_parallel: number; approvals?: TaskApprovalEvent[]; checks?: CheckSpec[] },
 ): AppState {
   const ids = new Set(snap.items.map((t) => t.id));
   const keep = <T,>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).filter(([k]) => ids.has(k)));
@@ -224,6 +228,7 @@ function applySnapshot(
     tasks: newestFirst(snap.items),
     taskFolders: snap.folders,
     savedLanes: snap.saved_lanes,
+    projectChecks: snap.checks ?? [],
     maxParallel: snap.max_parallel,
     taskText: keep(s.taskText),
     taskActivity: keep(s.taskActivity),
@@ -282,10 +287,13 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, taskActivity: { ...s.taskActivity, [e.task_id]: { tool: e.tool, path: e.path } } };
     case "task_done": {
       const who = ENGINE_NAME[e.engine] ?? e.engine;
+      // The error can carry check output; the toast shows its first line, the card the rest.
+      const reason = e.error ? e.error.split("\n")[0] : "";
+      const checked = e.verification === "passed" ? " Checks passed." : e.verification === "unverified" ? " (Unverified.)" : "";
       const toasts =
         e.status === "done"
-          ? toast(s, "info", `${who} finished ${e.title}.${e.summary ? ` ${e.summary}` : ""}`)
-          : toast(s, "error", `${who}'s task ${e.title} failed${e.error ? `: ${e.error}` : "."}`);
+          ? toast(s, "info", `${who} finished ${e.title}.${checked}${e.summary ? ` ${e.summary}` : ""}`)
+          : toast(s, "error", `${who}'s task ${e.title} failed${reason ? `: ${reason}` : "."}`);
       return { ...s, toasts, taskAttention: s.taskAttention + 1 };
     }
     case "task_approval_required":

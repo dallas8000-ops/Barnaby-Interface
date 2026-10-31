@@ -499,6 +499,23 @@ MAX_PENDING_PER_IP = 4               # unauthenticated sockets waiting on their 
 MAX_PENDING = 16
 
 
+def raise_frame_limit(protocol: Any, size: int) -> None:
+    """Lift the pre-auth frame cap on a live connection.
+
+    websockets 15 reads ``Protocol.max_size`` for every frame; 16 replaced it with
+    ``max_message_size`` (plus ``max_fragment_size``) and ignores a ``max_size``
+    attribute, which left authenticated tablets stuck at the 4 KB pre-auth cap.
+    Set whichever this version reads. Without a protocol the cap stays at 4 KB,
+    the safe direction.
+    """
+    if protocol is None:
+        return
+    if hasattr(protocol, "max_message_size"):
+        protocol.max_message_size = size
+    else:
+        protocol.max_size = size
+
+
 class TabletBlocked(RuntimeError):
     """Tablet access is deliberately off (e.g. the network is Public). Not a fault: show the reason."""
 
@@ -701,9 +718,7 @@ class RemoteServer:
             return
         self.lockout.clear(peer)
         self.registry.touch(device_id)
-        protocol = getattr(ws, "protocol", None)
-        if protocol is not None:
-            protocol.max_size = REMOTE_MAX_FRAME  # authenticated: audio clips allowed now
+        raise_frame_limit(getattr(ws, "protocol", None), REMOTE_MAX_FRAME)  # authenticated: audio clips allowed now
         self._on_change()
         try:
             await self.bridge.run_client(ws, ClientInfo(role="remote", device_id=device_id),
