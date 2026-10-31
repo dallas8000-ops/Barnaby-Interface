@@ -83,19 +83,12 @@ class CommandChain:
 # ------------------------------------------------------------------ splitting
 import re as _re  # noqa: E402
 
-# "then" joins steps only when it isn't the consequent of a conditional clause.
-_CONDITIONAL = _re.compile(r"\b(?:if|when|whenever|unless|once|as soon as|in case)\b", _re.IGNORECASE)
-_SEPARATOR = _re.compile(
-    r"(?P<punct>\s*[,;.]\s*|\s+)"
-    r"(?P<word>and\s+then|then|after\s+that|afterwards|and\s+finally|finally|lastly|next)\b"
-    r"\s*[,:]?\s+",
-    _re.IGNORECASE,
-)
-_LEAD = _re.compile(r"^\s*(?:first(?:ly)?|to\s+start)\b\s*[,:]?\s*", _re.IGNORECASE)
+from . import languages as _languages  # noqa: E402
+
 _CODE = _re.compile(r"`[^`]*`")
 
 
-def split_chain(text: str) -> list[str]:
+def split_chain(text: str, lang: str = "en") -> list[str]:
     """Split one spoken instruction into sequential steps.
 
     Deliberately conservative, because a wrong split sends the agent fragments:
@@ -104,6 +97,8 @@ def split_chain(text: str) -> list[str]:
     * a "then" whose clause starts a conditional ("if the tests fail then
       revert", "when it builds, then deploy") is part of one step;
     * text inside backticks is never split.
+    Other languages use their own words from ``languages.GRAMMARS`` with the
+    same rules; English separators are understood in every language.
     Returns ``[text]`` when there's nothing to split.
     """
     original = " ".join(text.split())
@@ -117,17 +112,21 @@ def split_chain(text: str) -> list[str]:
         return f"\x00{len(spans) - 1}\x00"
 
     masked = _CODE.sub(_mask, original)
+    grammars = _languages.grammars(lang)
     steps: list[str] = []
     start = 0
-    for m in _SEPARATOR.finditer(masked):
+    for g, m in _separators(masked, grammars):
+        if m.start() < start:
+            continue  # overlaps a separator already used
         clause = masked[start:m.start()]
-        word = m.group("word").lower().split()[-1] if m.group("word") else ""
+        word = " ".join(m.group("word").lower().split())
         punct = m.group("punct").strip()
         if not clause.strip():
             continue  # leading "then ..." isn't a split
-        if word == "next" and not punct:
+        if word in g.chain_needs_punct and not punct:
             continue  # "the next page" is content
-        if word == "then" and _CONDITIONAL.search(clause):
+        if word in g.chain_then and any(c.chain_conditional.search(clause) for c in grammars
+                                        if c.chain_conditional):
             continue  # "if X then Y" is one step
         steps.append(clause)
         start = m.end()
@@ -138,9 +137,18 @@ def split_chain(text: str) -> list[str]:
 
     cleaned = []
     for i, s in enumerate(steps):
-        s = _unmask(s).strip().rstrip(".;,").strip()
+        s = _unmask(s).strip().rstrip(".;,。；，、").strip()
         if i == 0:
-            s = _LEAD.sub("", s)
+            for g in grammars:
+                if g.chain_lead:
+                    s = g.chain_lead.sub("", s, count=1)
         if s:
             cleaned.append(s[0].upper() + s[1:])
     return cleaned or [original]
+
+
+def _separators(text: str, grammars: tuple[_languages.Grammar, ...]) -> list[tuple[_languages.Grammar, _re.Match[str]]]:
+    """(grammar, match) for every separator in ``text``, in order of position."""
+    found = [(m.start(), -len(m.group(0)), i, g, m) for i, g in enumerate(grammars) if g.chain_sep
+             for m in g.chain_sep.finditer(text)]
+    return [(g, m) for *_, g, m in sorted(found, key=lambda f: f[:3])]

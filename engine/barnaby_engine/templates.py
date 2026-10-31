@@ -96,31 +96,45 @@ class TemplateManager:
 # ------------------------------------------------------------------ voice matching
 import re as _re  # noqa: E402
 
-_TEMPLATE_RE = _re.compile(
-    r"^\s*(?:please\s+)?(?:run|start|use|do|begin|kick\s+off|launch)\s+"
-    r"(?:the\s+|a\s+|my\s+|our\s+)?(?P<name>.+?)\s+(?:template|workflow|checklist|routine|playbook)\b"
-    r"(?:\s*(?:on|for|with|against|to)\s+(?P<ctx>.+?))?\s*[.!]?\s*$",
-    _re.IGNORECASE,
-)
-_FILLER = {"cycle", "process", "flow", "the", "a", "my"}
+from . import languages as _languages  # noqa: E402
+
+_CJK = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+_WORD = _re.compile(rf"[^\W_{_CJK}]+|[{_CJK}]+")
 
 
 def _tokens(text: str) -> list[str]:
-    return [t for t in _re.split(r"[^a-z0-9]+", text.lower()) if t]
+    # Letters/digits in any script; a run of Han/kana is one token ("デバッグ").
+    return _WORD.findall(text.lower())
 
 
-def match_template(text: str, templates: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None] | None:
+def match_template(text: str, templates: list[dict[str, Any]],
+                   lang: str = "en") -> tuple[dict[str, Any], str | None] | None:
     """ "run the TDD template for the cart total" -> (tdd template, "the cart total").
 
     Only an explicit "<verb> the <name> template|workflow|checklist" phrasing
     counts, so ordinary instructions that merely mention a template ("update
     the email template") are never hijacked. Spoken words match template name
     or id words by prefix ("debug" ~ "debugging", "tdd" ~ "tdd-cycle").
+    Each language has its own phrasing and a few aliases ("depuración" ->
+    "debugging") in ``languages.GRAMMARS``.
     """
-    m = _TEMPLATE_RE.match(text)
-    if not m:
-        return None
-    spoken = [t for t in _tokens(m.group("name")) if t not in _FILLER]
+    for g in _languages.grammars(lang):
+        m = g.template.match(text) if g.template else None
+        if not m:
+            continue
+        spoken: list[str] = []
+        for t in _tokens(m.group("name")):
+            if t not in g.template_filler:
+                spoken.extend(g.template_alias.get(t, t).split())
+        found = _best_template(spoken, templates)
+        if found is not None:
+            groups = m.groupdict()
+            ctx = (groups.get("ctx") or groups.get("ctx2") or "").strip() or None
+            return found, ctx
+    return None
+
+
+def _best_template(spoken: list[str], templates: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not spoken:
         return None
     best: tuple[int, dict[str, Any]] | None = None
@@ -130,10 +144,7 @@ def match_template(text: str, templates: list[dict[str, Any]]) -> tuple[dict[str
             score = len(words)  # prefer the tightest match
             if best is None or score < best[0]:
                 best = (score, tpl)
-    if best is None:
-        return None
-    ctx = (m.group("ctx") or "").strip() or None
-    return best[1], ctx
+    return best[1] if best else None
 
 
 def template_steps(template: dict[str, Any], limit: int = 12) -> list[str]:

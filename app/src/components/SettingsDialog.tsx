@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { send } from "../lib/client";
 import { pickFolder } from "../lib/platform";
 import type { Config } from "../lib/protocol";
+import { LanguageSection, RecognitionModelField } from "./LanguageSettings";
 import { SKINS, applySkin, readSkin, saveSkin, type Skin } from "../lib/skin";
 import { useApp } from "../store/app";
 import { DevinKeyField } from "./DevinKeyField";
@@ -10,25 +11,6 @@ import { RemoteSettings } from "./RemoteSettings";
 import { TabletAccessSection } from "./TabletAccessSection";
 import { TasksSettings } from "./TasksSettings";
 import { Modal } from "./Modal";
-
-const VOICES: { id: string; label: string }[] = [
-  { id: "am_michael", label: "Michael (US)" },
-  { id: "am_adam", label: "Adam (US)" },
-  { id: "am_fenrir", label: "Fenrir (US)" },
-  { id: "af_heart", label: "Heart (US)" },
-  { id: "af_bella", label: "Bella (US)" },
-  { id: "af_sarah", label: "Sarah (US)" },
-  { id: "bm_george", label: "George (UK)" },
-  { id: "bm_lewis", label: "Lewis (UK)" },
-  { id: "bf_emma", label: "Emma (UK)" },
-];
-
-const WHISPER: { id: string; label: string }[] = [
-  { id: "base.en", label: "Fast (base.en)" },
-  { id: "small.en", label: "Balanced (small.en)" },
-  { id: "medium.en", label: "Accurate (medium.en, needs a strong CPU or GPU)" },
-  { id: "distil-large-v3", label: "Most accurate (distil-large-v3, GPU recommended)" },
-];
 
 type Theme = "system" | "dark" | "light";
 export function applyTheme(theme: Theme) {
@@ -43,7 +25,7 @@ const readTheme = (): Theme => {
   }
 };
 
-function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
+export function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
   return (
     <div className="grid gap-1 py-2.5 sm:grid-cols-[180px_1fr] sm:items-start sm:gap-4">
       <label htmlFor={htmlFor} className="pt-1.5 text-sm font-medium text-ink">
@@ -73,7 +55,7 @@ function Toggle({ id, checked, onChange, label }: { id: string; checked: boolean
   );
 }
 
-const inputCls = "w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none";
+export const inputCls = "w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none";
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const role = useApp((s) => s.role);
@@ -172,6 +154,8 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
         </div>
       </section>
 
+      <LanguageSection config={config} set={set} />
+
       <section className="mt-3 border-t border-line pt-3">
         <h3 className="font-strip text-sm font-semibold text-muted">Listening</h3>
         <Field label="Microphone" htmlFor="mic">
@@ -189,15 +173,7 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </Field>
-        <Field label="Recognition model" htmlFor="whisper" hint="Runs on your PC. Larger models hear technical words better but take longer.">
-          <select id="whisper" className={inputCls} value={config.whisper_model} onChange={(e) => set({ whisper_model: e.target.value })}>
-            {WHISPER.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.label}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <RecognitionModelField config={config} set={set} />
         <Field label="Hands-free pause" htmlFor="hf-pause" hint="In hands-free mode, how long a pause ends your turn. Raise it if you get cut off mid-thought.">
           <div className="flex items-center gap-3">
             <input
@@ -229,15 +205,6 @@ function DesktopSettings({ onClose }: { onClose: () => void }) {
         <h3 className="font-strip text-sm font-semibold text-muted">Speaking</h3>
         <Field label="Speak replies">
           <Toggle id="tts" label="Speak replies" checked={config.tts_enabled} onChange={(v) => set({ tts_enabled: v })} />
-        </Field>
-        <Field label="Voice" htmlFor="voice">
-          <select id="voice" className={inputCls} value={config.tts_voice} onChange={(e) => set({ tts_voice: e.target.value })}>
-            {VOICES.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.label}
-              </option>
-            ))}
-          </select>
         </Field>
         <Field label="Speed" htmlFor="speed">
           <div className="flex items-center gap-3">

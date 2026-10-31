@@ -146,6 +146,8 @@ export interface Config {
   continuous_mode_enabled: boolean;
   continuous_mode_timeout: number;
   whisper_model: string;
+  /** "auto" (detect per utterance) or a language code from lib/languages.ts. Older engines omit it: English. */
+  spoken_language?: string;
   whisper_device: "auto" | "cpu" | "cuda";
   input_device: number | null;
   tts_enabled: boolean;
@@ -210,6 +212,10 @@ export type EngineEvent =
       components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
       tasks?: { type: "tasks" } & TasksSnapshot;
       claude_auth?: ClaudeAuth;
+      /** Conversation language right now (follows the speaker in Auto). */
+      language?: string;
+      /** Recognition model id -> already downloaded on the PC. */
+      stt_installed?: Record<string, boolean>;
       protocol: number;
     }
   | { type: "state"; state: EngineState; detail: string | null }
@@ -235,7 +241,8 @@ export type EngineEvent =
   | ({ type: "claude_auth" } & ClaudeAuth)
   | { type: "paired"; token: string; device_id: string }
   | { type: "pair_error"; message: string }
-  | { type: "say"; text: string }
+  | { type: "say"; text: string; lang?: string }
+  | { type: "stt_models"; installed: Record<string, boolean> }
   | { type: "say_stop" }
   | ({ type: "tablet_status" } & TabletStatus)
   | { type: "tablet_pairing"; url: string; expires_at: number }

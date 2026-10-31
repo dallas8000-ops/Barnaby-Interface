@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from . import languages
 from .checks import CheckSpec
 
 MAX_LANES = 8
@@ -187,38 +188,28 @@ def pick_next(tasks: list[TaskRecord], max_parallel: int, *, worktrees_share_lan
 
 
 # ---------------------------------------------------------------- voice grammar
-_ENGINE_WORDS = {"claude": "claude", "clod": "claude", "cloud": "claude", "cursor": "cursor",
-                 "curser": "cursor", "devin": "devin", "devon": "devin", "deven": "devin"}
-_ENG = r"(?P<engine>claude|clod|cloud|cursor|curser|devin|devon|deven)"
-_SEP = r"\s*[:,.\-]\s*"
-_TASK_FOR = re.compile(
-    rf"^\s*(?:(?:new|start\s+an?|add\s+an?|create\s+an?)\s+)?task\s+(?:for|to)\s+{_ENG}"
-    rf"(?:\s+(?:in|on|for)\s+(?P<lanes>[^:]+?))?{_SEP}(?P<rest>.+)$", re.IGNORECASE | re.DOTALL)
-_ASSIGN = re.compile(rf"^\s*assign\s+(?P<lanes>.+?)\s+to\s+{_ENG}{_SEP}(?P<rest>.+)$",
-                     re.IGNORECASE | re.DOTALL)
-_FILLER_WORDS = {"the", "folder", "folders", "lane", "lanes", "directory", "part", "side"}
-
-
-def _lane_words(text: str | None) -> list[str]:
+def _lane_words(text: str | None, g: languages.Grammar) -> list[str]:
     if not text:
         return []
     words = []
-    for chunk in re.split(r"\s*(?:,|&|\band\b|\bplus\b)\s*", text, flags=re.IGNORECASE):
-        kept = [w for w in chunk.split() if w.lower() not in _FILLER_WORDS]
+    for chunk in g.lane_split.split(text) if g.lane_split else [text]:
+        kept = [w for w in chunk.split() if w.lower() not in g.lane_filler]
         if kept:
             words.append(" ".join(kept))
     return words
 
 
-def parse_task_command(text: str) -> tuple[str, list[str], str] | None:
-    """"task for Devin in backend: add orders" -> ("devin", ["backend"], "add orders")."""
-    for rx in (_TASK_FOR, _ASSIGN):
-        m = rx.match(text)
-        if m:
-            rest = m.group("rest").strip()
-            if not rest:
-                return None
-            return _ENGINE_WORDS[m.group("engine").lower()], _lane_words(m.group("lanes")), rest
+def parse_task_command(text: str, lang: str = "en") -> tuple[str, list[str], str] | None:
+    """"task for Devin in backend: add orders" -> ("devin", ["backend"], "add orders").
+    Phrasing per language comes from ``languages.GRAMMARS``; English always works."""
+    for g in languages.grammars(lang):
+        for rx in g.task_patterns:
+            m = rx.match(text)
+            if m:
+                rest = m.group("rest").strip()
+                if not rest:
+                    return None
+                return g.engines[m.group("engine").lower()], _lane_words(m.group("lanes"), g), rest
     return None
 
 

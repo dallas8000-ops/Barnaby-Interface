@@ -20,11 +20,14 @@ from .store import Store
 
 PROMOTE_AT = 2
 _MAX_SPAN_WORDS = 4
-_TOKEN = re.compile(r"[A-Za-z0-9_.\-/#+@']+")
+# \w: letters in any script (for ASCII text exactly [A-Za-z0-9_]), so "corrección" is one token.
+_TOKEN = re.compile(r"[\w.\-/#+@']+")
 _STOP = frozenset("""
 a an the and or but if of to in on at for with by from is are was were be been it its this that
 these those i you we they he she me my your our can could would should will do does did not no
 yes ok okay so then than just please now also as up out into about
+que los las del una por para con pero sí les des une pour avec mais oui non che gli per della
+sono não uma com mas sim
 """.split())
 _IDENTIFIER = re.compile(r"^(?:[a-z]+[A-Z]\w*|[A-Z][a-z]+[A-Z]\w*|\w+[._/]\w+|[A-Z]{2,}\w*)$")
 

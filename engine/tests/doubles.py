@@ -50,24 +50,36 @@ class FakeRecorder:
 
 
 class FakeTranscriber:
-    def __init__(self, texts: list[str] | None = None) -> None:
+    """``languages``: what each utterance is "heard" as (like Whisper's detection);
+    omitted, ``last_language`` stays None and the orchestrator keeps its language."""
+
+    def __init__(self, texts: list[str] | None = None, languages: list[str] | None = None) -> None:
         self.texts = list(texts or ["run the tests and fix anything failing"])
+        self.languages = list(languages or [])
         self.prompts: list[str] = []
+        self.language = "en"
+        self.last_language: str | None = None
 
     def load(self) -> None:
         pass
 
     def transcribe(self, audio: np.ndarray, vocabulary_prompt: str) -> str:
         self.prompts.append(vocabulary_prompt)
+        if self.languages:
+            self.last_language = self.languages.pop(0) if len(self.languages) > 1 else self.languages[0]
         return self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
 
 
 class FakeSpeaker:
     def __init__(self, delay: float = 0.0) -> None:
         self.spoken: list[str] = []
+        self.languages: list[str] = []   # set_language() calls, one per sentence
         self.stops = 0
         self.delay = delay
         self._stop = threading.Event()
+
+    def set_language(self, language: str) -> None:
+        self.languages.append(language)
 
     def load(self) -> None:
         pass

@@ -12,6 +12,8 @@ from typing import Callable, Protocol
 
 import numpy as np
 
+from .languages import AUTO, LANGUAGES, WHISPER_MODELS, stt_model_for, voice_for, whisper_language
+
 log = logging.getLogger(__name__)
 
 STT_RATE = 16_000
@@ -28,6 +30,12 @@ class Recorder(Protocol):
 class Transcriber(Protocol):
     def load(self) -> None: ...
     def transcribe(self, audio: np.ndarray, vocabulary_prompt: str) -> str: ...
+    # Optional: ``language`` (what to listen for, "auto" = detect) and ``last_language``
+    # (what the last utterance was in). Test doubles may omit both: English is assumed.
+
+
+class SetupError(RuntimeError):
+    """A missing model or package. The message is written for the user, not a log."""
 
 
 class Speaker(Protocol):
@@ -212,16 +220,60 @@ def run_with_timeout(fn: Callable[[], object], timeout: float, what: str) -> Non
     raise TimeoutError(f"{what} did not finish within {timeout:.0f}s")
 
 
+def whisper_installed(model: str) -> bool:
+    """Whether the model's weights are already in the local Hugging Face cache."""
+    try:
+        from faster_whisper.utils import download_model  # lazy
+        download_model(model, local_files_only=True)
+        return True
+    except Exception:  # noqa: BLE001 - "not cached" surfaces as several error types
+        return False
+
+
+def _size(model: str) -> str:
+    info = WHISPER_MODELS.get(model)
+    if info is None:
+        return ""
+    mb = info.disk_mb
+    return f" (about {mb / 1000:.1f} GB)" if mb >= 1000 else f" (about {mb} MB)"
+
+
 class WhisperTranscriber:
-    def __init__(self, model: str = "small.en", device: str = "auto") -> None:
-        self.model_name = model
+    def __init__(self, model: str = "small.en", device: str = "auto", language: str = "en") -> None:
+        # An English-only model can't hear Spanish: swap in its multilingual sibling.
+        self.model_name = stt_model_for(model, language)
+        self.requested_model = model
         self.device = device
+        self.language = language
+        self.last_language: str | None = None
         self.status_detail: str | None = None
         self._model = None
         self._load_lock = threading.Lock()
         # CTranslate2 models are not safe to drive from two executor threads at
         # once; serialize so a second push-to-talk queues instead of racing.
         self._run_lock = threading.Lock()
+
+    def pending_download(self) -> str | None:
+        """A user-facing note when load() will have to download the model first."""
+        if self._model is not None or whisper_installed(self.model_name):
+            return None
+        return f"Downloading the {self.model_name} speech model{_size(self.model_name)}. This happens once."
+
+    def _ensure_downloaded(self) -> None:
+        try:
+            from faster_whisper.utils import download_model  # lazy
+        except ImportError:
+            return  # no separate downloader: WhisperModel() fetches the weights itself
+        if whisper_installed(self.model_name):
+            return
+        log.info("Whisper model %s is not installed; downloading", self.model_name)
+        try:
+            download_model(self.model_name)
+        except Exception as exc:  # noqa: BLE001
+            raise SetupError(
+                f"The {self.model_name} speech model isn't installed and couldn't be downloaded{_size(self.model_name)}: "
+                f"{exc}. Connect to the internet once so Barnaby can fetch it, or pick an installed model "
+                "in Settings.") from exc
 
     @staticmethod
     def _warm_up(model: object) -> None:
@@ -239,6 +291,7 @@ class WhisperTranscriber:
                 return
             from faster_whisper import WhisperModel  # lazy
 
+            self._ensure_downloaded()
             candidates: list[str]
             if self.device == "cpu":
                 candidates = ["cpu"]
@@ -265,7 +318,9 @@ class WhisperTranscriber:
                 note = ""
                 if device == "cpu" and "cuda" in candidates:
                     note = " (GPU found, but its CUDA libraries aren't installed)"
-                self.status_detail = f"{self.model_name} on {device.upper()}{note}"
+                swapped = (f", multilingual for {LANGUAGES[self.language].name}"
+                           if self.model_name != self.requested_model and self.language in LANGUAGES else "")
+                self.status_detail = f"{self.model_name} on {device.upper()}{note}{swapped}"
                 log.info("Whisper ready: %s", self.status_detail)
                 return
             raise RuntimeError(f"Speech recognition could not start: {last_exc}") from last_exc
@@ -278,32 +333,61 @@ class WhisperTranscriber:
 
     def _transcribe(self, audio: np.ndarray, vocabulary_prompt: str) -> str:
         assert self._model is not None
-        segments, _info = self._model.transcribe(
+        language = whisper_language(self.model_name, self.language)
+        if language is None:
+            language = self._detect(audio)
+        segments, info = self._model.transcribe(
             audio,
-            language="en" if self.model_name.endswith(".en") else None,
+            language=language,
             beam_size=5,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 400},
             initial_prompt=vocabulary_prompt or None,
             condition_on_previous_text=False,  # stops hallucinated repetition loops
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        text = " ".join(s.text.strip() for s in segments).strip()
+        self.last_language = language or getattr(info, "language", None)
+        return text
+
+    def _detect(self, audio: np.ndarray) -> str | None:
+        """Auto mode: the most likely language Barnaby supports. Restricting the choice
+        stops accented English being heard as, say, Dutch. None = let Whisper decide."""
+        try:
+            _lang, _p, ranked = self._model.detect_language(audio=audio, vad_filter=True)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 - older faster-whisper, or nothing voiced
+            log.debug("language detection failed, letting Whisper decide: %s", exc)
+            return None
+        best = max(((code, p) for code, p in ranked if code in LANGUAGES), key=lambda cp: cp[1], default=None)
+        return best[0] if best else None
 
 
 class KokoroSpeaker:
     def __init__(self, voice: str = "am_michael", speed: float = 1.05) -> None:
+        self.preferred_voice = voice
         self.voice = voice
         self.speed = speed
         self._pipelines: dict[str, object] = {}
         self._stop = threading.Event()
         self._lock = threading.Lock()
 
+    def set_language(self, language: str) -> None:
+        """Reply in ``language``: the chosen voice if it speaks it, else that language's default."""
+        if language and language != AUTO:
+            self.voice = voice_for(language, self.preferred_voice)
+
     def _pipeline(self):
         from kokoro import KPipeline  # lazy
 
         lang = self.voice[:1] if self.voice[:1] in "abefhijpz" else "a"
         if lang not in self._pipelines:
-            self._pipelines[lang] = KPipeline(lang_code=lang)
+            try:
+                self._pipelines[lang] = KPipeline(lang_code=lang)
+            except ImportError as exc:
+                extra = next((x.extra for x in LANGUAGES.values() if lang in x.kokoro and x.extra), "")
+                if not extra:
+                    raise
+                name = next(x.name for x in LANGUAGES.values() if lang in x.kokoro)
+                raise SetupError(f"{name} replies need an extra package. Run: pip install \"{extra}\"") from exc
         return self._pipelines[lang]
 
     def load(self) -> None:

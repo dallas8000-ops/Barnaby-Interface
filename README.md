@@ -63,7 +63,7 @@ On first launch, pick your project folder. The speech models (about 250 MB) down
 | Interrupt Barnaby speaking | Start talking (barge-in), or **Quiet** |
 | Stop a running task | **Stop**, or just give a new instruction; it cancels and resumes the same Claude session with your new words |
 | Fix a misheard word | Edit the review box, then **Enter**. **Esc** discards |
-| Approve an action | **Approve**, or say "yes" / "no". Critical actions need a 1.2-second press-and-hold and can't be voice-approved |
+| Approve an action | **Approve**, or say "yes" / "no" (or the same in your [language](#languages)). Critical actions need a 1.2-second press-and-hold and can't be voice-approved |
 | Talk hands-free | Turn on **Hands-free** under the instruction box. Just talk; a pause sends it |
 | Chain steps | Say them in order: "run the tests, **then** fix anything failing" |
 | Run a template | "Run the TDD template for the cart total", or the **Templates** button |
@@ -171,6 +171,44 @@ Turn on **Hands-free** (next to the agent switch) and the microphone stays open.
 - **Push-to-talk still works.** Holding Space takes over the mic for that recording, and hands-free resumes afterwards.
 - **It listens to a microphone, not your speakers.** Some sound cards make a speaker-loopback input ("What U Hear", "Stereo Mix") the Windows default recording device. With the microphone left on *Automatic*, Barnaby skips those and uses the first real mic on the same audio system. Settings shows which one it picked and labels loopback inputs. Picking a device yourself always wins.
 
+## Languages
+
+Barnaby can be spoken to, and answers, in **English, Spanish, French, Italian, Portuguese (Brazil), Hindi, Japanese and Mandarin Chinese**, the languages Kokoro can speak. Pick one in **Settings → Language → Spoken language**, or choose **Auto-detect**.
+
+- **Recognition** stays on the PC, also for a tablet. With a language picked, Whisper is told that language. In Auto-detect, Whisper scores every language for each utterance and Barnaby uses the most likely one it supports, so accented English isn't heard as Dutch. Typed Hindi, Japanese or Chinese switches Auto-detect too.
+- **Replies.** The agent is asked to answer in your language and to leave code, identifiers, file paths, commands and error messages as they are. Barnaby reads the answer with a Kokoro voice for that language. **Reply voice** lists that language's voices. In Auto-detect, your chosen voice is used when you speak its language and other languages get their default voice. The tablet speaks with Android's voice for the same language, because each spoken sentence carries its BCP-47 tag (`es-ES`, `ja-JP`, ...).
+- **Speech output** splits sentences on `。！？` and the Hindi `।` as well as `. ! ?`, and still never reads code blocks, links or secrets aloud.
+- **English always works.** "send it", "yes" and "run the tests, then commit" are understood whatever language is selected.
+
+**Recognition models.** `.en` models and `distil-large-v3` only understand English. When another language (or Auto-detect) is selected, Barnaby uses the multilingual model of the same size instead and says so in Settings. A model downloads once, on first use. Settings shows which ones are not downloaded yet, and if a download fails Barnaby says which model is missing and how big it is, instead of failing silently. Sizes are approximate:
+
+| Model | Languages | Download | GPU memory (fp16) |
+|---|---|---|---|
+| `tiny` / `tiny.en` | all / English | 75 MB | ~0.5 GB |
+| `base` / `base.en` | all / English | 145 MB | ~0.7 GB |
+| `small` / `small.en` (default) | all / English | 485 MB | ~1.2 GB |
+| `medium` / `medium.en` | all / English | 1.5 GB | ~2.6 GB |
+| `large-v3-turbo` | all | 1.6 GB | ~2.8 GB |
+| `distil-large-v3` | English | 1.5 GB | ~2.6 GB |
+| `large-v3` | all | 3.1 GB | ~4.7 GB |
+
+On CPU, Whisper runs int8 and needs about half the GPU figure in RAM. Only the selected model is loaded. Kokoro is about 330 MB, shared by every language, and each voice is a file of about half a megabyte fetched the first time it speaks. Japanese and Chinese replies need extra packages on the PC: `pip install -e "engine[languages]"`, which installs `misaki[ja]` and `misaki[zh]`. Barnaby names the package if it's missing. The other languages use Kokoro's espeak-ng phonemizer.
+
+**Voice commands in each language.** Every short command has a table per language in `engine/barnaby_engine/languages.py`:
+
+| Command | Examples |
+|---|---|
+| Approve / deny | "sí, adelante" / "no lo hagas", "oui, vas-y" / "non", "हाँ, कर दो" / "मत करो", "はい、お願いします" / "いいえ", "是的，继续" / "不要" |
+| Send / discard a draft | "envíalo" / "borra eso", "envoie-le" / "laisse tomber", "送信して" / "取り消して", "发送" / "算了" |
+| Address an agent | "pídele a Cursor que ...", "demande à Claude de ...", "Cursor से कहो कि ...", "クロード、...", "让Cursor..." |
+| Chain steps | "... y luego ...", "... puis ...", "... e poi ...", "... e depois ...", "... और फिर ...", "...、それから...", "...，然后..." |
+| Background task | "tarea para Devin en backend: ...", "tâche pour Devin dans backend : ...", "Devinにタスク（backend）で：...", "给Devin一个任务，在backend里：..." |
+| Run a template | "ejecuta la plantilla TDD para ...", "lance le workflow de débogage", "デバッグのワークフローを実行して", "运行调试工作流" |
+
+The safety rules are the same in every language. Only the whole short phrase counts, so "sí, y también borra los logs" is an instruction for the agent and not an approval. Words that only mean "okay" (*vale*, *d'accord*, *ठीक है*, *好的*) don't approve anything. Critical actions can't be approved by voice in any language, because that check never looks at the words.
+
+The phrase tables were written for this release and covered by tests, but they haven't yet been checked by native speakers in daily use. If a natural phrasing isn't recognized, add it to that language's table.
+
 ## Chained steps and templates
 
 **Chaining.** Say several steps in one breath: "run the tests, then fix anything failing, and finally commit". Each step runs as its own turn in the same session, so later steps see what earlier ones did. A progress panel above the push-to-talk scope shows each step as done, running or next, with a **Stop steps** button. Chaining follows three rules:
@@ -261,7 +299,7 @@ The engine suite drives the real subprocess path with a fake `claude` executable
 
 ## GPU
 
-With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `setup.ps1`, then choose **Most accurate (distil-large-v3)** in Settings. Recognition on the GPU is several times faster.
+With an NVIDIA GPU, install the CUDA build of torch instead of the CPU one in `setup.ps1`, then choose **Most accurate (distil-large-v3)** in Settings, or **large-v3-turbo** if you speak a language other than English. Recognition on the GPU is several times faster.
 
 ## Packaging
 
