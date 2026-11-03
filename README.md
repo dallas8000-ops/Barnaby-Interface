@@ -155,7 +155,9 @@ tablet access and pairing. The tablet picks only from projects the PC has alread
 can't type in a folder path. The engine enforces all of this, not just the UI.
 
 **Removing a tablet:** Settings → Tablet access → **Remove**. Its connection closes at once and
-its key stops working.
+its key stops working. That, or a key the PC no longer accepts, is the only thing that makes a
+tablet forget its pairing. A slow or dropped Wi-Fi connection just reconnects with the same key,
+so you don't have to pair again.
 
 **How it's protected:**
 - Off by default. The tablet port only listens while tablet access is on.
@@ -163,8 +165,9 @@ its key stops working.
 - Only paired devices get in. Each has a random 256-bit token; the PC stores only its SHA-256
   hash. Pairing codes are single-use, expire in 5 minutes, and travel in the URL fragment, so
   they're never sent in a request line.
-- Five failed attempts from one address lock it out for 10 minutes. Unauthenticated
-  connections are capped, and limited to 4 KB until they authenticate.
+- Five failed attempts from one address lock it out for 10 minutes. Only a wrong key or code
+  counts as a failure; a connection that sends nothing in time (slow Wi-Fi) is closed without
+  counting. Unauthenticated connections are capped, and limited to 4 KB until they authenticate.
 - Only private (home-network) addresses may connect. Barnaby refuses to start tablet access
   while Windows marks your network as Public, and the firewall rule only opens the port on
   Private networks.

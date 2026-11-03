@@ -30,6 +30,12 @@ captures the user's voice and shows and speaks the results.
      last seen.
    - AC2.3 A wrong, expired, or reused code fails. Five failures from one address within 10
      minutes block that address for 10 minutes.
+   - AC2.4 (added 2026-10-23) A paired tablet keeps its pairing through network trouble. Only a
+     rejected token or code closes with 4401, which is what makes the tablet forget its token,
+     and only that counts toward the lockout. A socket that sends no first frame within 10 s
+     (slow Wi-Fi, a tablet waking up) or drops before sending one closes with 4408: no lockout
+     strike, and the tablet retries with its saved token on the normal backoff. Before this fix
+     both cases sent 4401, so a Wi-Fi hiccup forced a full re-pair.
 3. **Trust the connection once.** The connection is HTTPS/WSS. Barnaby creates its own
    certificate authority once and a server certificate for the PC's current LAN addresses.
    - AC3.1 `/barnaby-ca.crt` downloads the CA certificate, so the tablet can trust it and stop
@@ -104,7 +110,10 @@ captures the user's voice and shows and speaks the results.
     `app/dist` (path-confined, CSP and security headers) and `/barnaby-ca.crt`. It rejects
     non-private peers and cross-origin WebSocket upgrades. The first frame is either
     `{"type":"auth","token"}` or `{"type":"pair","code","name"}`; pairing answers with
-    `{"type":"paired","token"}` and continues as authenticated.
+    `{"type":"paired","token"}` and continues as authenticated. Close codes before
+    authentication: 4401 rejected (counted, tablet forgets its token), 4408 no first frame in
+    time (not counted, tablet retries), 4409 no room to pair, 4429 locked out, 1013 too many
+    unauthenticated sockets.
 - **Orchestrator**: `set_remote_listeners(n)`. While n > 0, `_enqueue_speech` emits
   `ev("say", text)` in place of local playback. New handlers for the desktop-only `tablet_*`
   commands and for remote `audio_clip`.
