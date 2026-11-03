@@ -6,6 +6,7 @@ import { useApp } from "../store/app";
 import { ApprovalCard } from "./Approvals";
 import { AssignTaskDialog } from "./AssignTaskDialog";
 import { CursorGuardNote } from "./CursorGuardNote";
+import { folderName } from "./Sidebar";
 
 const ENGINE: Record<string, string> = { claude: "Claude", cursor: "Cursor", devin: "Devin" };
 const ACTIVE: TaskStatus[] = ["queued", "running", "verifying", "needs_approval"];
@@ -134,7 +135,7 @@ function TaskCard({ task }: { task: TaskView }) {
               </span>
             )}
             {task.isolation === "shared" && <span title="Works in the project folder itself, not a worktree">· shared folder</span>}
-            {otherProject && <span title={task.workspace}>· other project</span>}
+            {otherProject && <span title={task.workspace}>· {folderName(task.workspace)}</span>}
             {time && <span>· {time}</span>}
             {task.cost_usd != null && <span>· ${task.cost_usd.toFixed(2)}</span>}
           </p>

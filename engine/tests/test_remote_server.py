@@ -433,3 +433,36 @@ class VpnAddressOrderTest(unittest.TestCase):
         from barnaby_engine import remote
         self.assertEqual(remote._parse_ip_lines("192.168.100.4\r\n\r\n10.0.0.3\r\nnot-an-ip\r\n"),
                          {"192.168.100.4", "10.0.0.3"})
+
+
+class RepairRegressionTest(_ServerBase):
+    """A slow or dropped connection must not cost the tablet its pairing (the user had to
+    re-pair after a Wi-Fi hiccup): only a real token rejection is 4401 and counts."""
+
+    async def test_no_first_frame_in_time_is_retryable_and_not_counted(self):
+        from unittest import mock
+
+        from barnaby_engine.remote import CLOSE_NO_FIRST_FRAME
+        ws, paired = await self.pair()
+        await ws.recv()  # hello
+        await ws.close()
+        with mock.patch("barnaby_engine.remote.FIRST_FRAME_TIMEOUT_S", 0.2):
+            for _ in range(6):  # more than the lockout allows, if they counted
+                slow = await self.ws()
+                with self.assertRaises(ConnectionClosed) as ctx:
+                    await slow.recv()
+                self.assertEqual(ctx.exception.rcvd.code, CLOSE_NO_FIRST_FRAME)
+        self.assertFalse(self.server.lockout.blocked("127.0.0.1"))
+        again = await self.ws()  # the same token still works on the retry
+        await again.send(json.dumps({"type": "auth", "token": paired["token"]}))
+        self.assertEqual(json.loads(await again.recv())["type"], "hello")
+        await again.close()
+
+    async def test_a_wrong_token_is_still_4401_and_counts_toward_lockout(self):
+        for _ in range(5):
+            ws = await self.ws()
+            await ws.send(json.dumps({"type": "auth", "token": "x" * 43}))
+            with self.assertRaises(ConnectionClosed) as ctx:
+                await ws.recv()
+            self.assertEqual(ctx.exception.rcvd.code, 4401)
+        self.assertTrue(self.server.lockout.blocked("127.0.0.1"))

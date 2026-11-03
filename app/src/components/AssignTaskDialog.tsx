@@ -19,15 +19,23 @@ const chip = (on: boolean) =>
 
 export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
   const engines = useApp((s) => s.engines);
-  const folders = useApp((s) => s.taskFolders);
-  const saved = useApp((s) => s.savedLanes);
+  const projects = useApp((s) => s.projects);
+  const workspace = useApp((s) => s.config?.workspace ?? "");
+  // Any project the PC has opened; the conversation's project unless picked otherwise.
+  const [project, setProject] = useState(workspace);
+  const chosen = project !== workspace ? projects.find((p) => p.path === project) : undefined;
+  const currentFolders = useApp((s) => s.taskFolders);
+  const currentSaved = useApp((s) => s.savedLanes);
+  const folders = chosen ? chosen.folders : currentFolders;
+  const saved = chosen ? chosen.saved_lanes : currentSaved;
   const current = useApp((s) => s.config?.engine ?? "claude");
   const firstUsable = engines.find((e) => e.name === current && e.available)?.name ?? engines.find((e) => e.available)?.name ?? "claude";
   const [engine, setEngine] = useState<AgentEngine>(firstUsable);
   const [lanes, setLanes] = useState<string[]>([]);
   const [instruction, setInstruction] = useState("");
   const [title, setTitle] = useState("");
-  const projectChecks = useApp((s) => s.projectChecks);
+  const currentChecks = useApp((s) => s.projectChecks);
+  const projectChecks = chosen ? (chosen.checks ?? []) : currentChecks;
   const desktop = useApp((s) => s.role === "desktop");
   // null: use the project's checks (Settings); a list: this task's own (only the PC may choose).
   const [checks, setChecks] = useState<CheckSpec[] | null>(null);
@@ -64,8 +72,9 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
     if (!text || tooMany || waiting) return;
     const lastToast = toasts.reduce((m, t) => Math.max(m, t.id), 0);
     pending.current = { ids: new Set(tasks.map((t) => t.id)), toast: lastToast };
+    const where = chosen ? { workspace: chosen.path } : {};
     const own = engine !== "devin" && checks !== null ? { checks } : {};
-    if (send({ type: "task_create", engine, instruction: text, lanes, title: title.trim() || null, ...own })) setWaiting(true);
+    if (send({ type: "task_create", engine, instruction: text, lanes, title: title.trim() || null, ...own, ...where })) setWaiting(true);
     else pending.current = null;
   };
 
@@ -78,6 +87,31 @@ export function AssignTaskDialog({ onClose }: { onClose: () => void }) {
         }}
         className="flex flex-col gap-4"
       >
+        {projects.length > 1 && (
+          <div>
+            <label htmlFor="task-project" className="text-sm font-medium text-ink">
+              Project
+            </label>
+            <select
+              id="task-project"
+              value={project}
+              onChange={(e) => {
+                setProject(e.target.value);
+                setLanes([]); // folders and checks belong to the project
+                setChecks(null);
+              }}
+              className="mt-1 w-full rounded-md border border-line bg-raised px-2.5 py-1.5 text-sm text-ink focus:border-cyan focus:outline-none"
+            >
+              {projects.map((p) => (
+                <option key={p.path} value={p.path}>
+                  {p.name}
+                  {p.path === workspace ? " (current)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <fieldset>
           <legend className="text-sm font-medium text-ink">Who does it</legend>
           <div className="mt-1.5 flex flex-col gap-1.5">

@@ -103,6 +103,64 @@ export interface TaskView {
   run_dir?: string;
 }
 
+/** A project folder the PC has opened. A tablet picks from these; only the PC adds to them. */
+export interface ProjectInfo {
+  path: string;
+  name: string;
+  current: boolean;
+  sessions: number;
+  last_used: number | null;
+  active_tasks: number;
+  /** Top-level folders, for task lanes. */
+  folders: string[];
+  saved_lanes: Record<string, string[]>;
+  /** The project's task checks from Settings. */
+  checks?: CheckSpec[];
+}
+
+export interface ApprovalRequiredEvent {
+  type: "approval_required";
+  turn_id: string;
+  request_id: string;
+  tool_name: string;
+  summary: string;
+  risk: Risk;
+  voice_approvable: boolean;
+  grantable: boolean;
+  detail: string;
+}
+
+export interface StoredSession extends SessionSummary {
+  claude_session_id: string | null;
+  turns: StoredTurn[];
+}
+
+/** Notifications a device may have missed, newest last. nid matches the live event's nid. */
+export type RecentEvent = (
+  | { type: "notice"; message: string }
+  | { type: "error"; code: string; message: string }
+  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; verification?: Verification }
+) & { nid: number; age_s: number };
+
+/** What's happening right now, in hello: a device that joins late or wakes up starts here. */
+export interface LiveSnapshot {
+  session: StoredSession | null;
+  turn: {
+    turn_id: string;
+    text: string;
+    session_id: string;
+    system: boolean;
+    engine: AgentEngine;
+    assistant: string;
+    tools: { id: string; name: string; summary: string; path: string | null; ok: boolean | null }[];
+  } | null;
+  approvals: ApprovalRequiredEvent[];
+  chain: { chain_id: string; name: string | null; steps: string[]; index: number } | null;
+  draft: { draft_id: string; heard: string; text: string } | null;
+  task_live: Record<string, { tool?: string; path?: string | null; text?: string }>;
+  recent: RecentEvent[];
+}
+
 export interface TaskApprovalEvent {
   type: "task_approval_required";
   task_id: string;
@@ -212,6 +270,8 @@ export type EngineEvent =
       components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
       tasks?: { type: "tasks" } & TasksSnapshot;
       claude_auth?: ClaudeAuth;
+      projects?: ProjectInfo[];
+      live?: LiveSnapshot;
       /** Conversation language right now (follows the speaker in Auto). */
       language?: string;
       /** Recognition model id -> already downloaded on the PC. */
@@ -228,11 +288,15 @@ export type EngineEvent =
   | { type: "tool_start"; turn_id: string; tool_id: string; name: string; summary: string; path: string | null }
   | { type: "tool_end"; turn_id: string; tool_id: string; ok: boolean; preview: string }
   | { type: "turn_end"; turn_id: string; status: string; text?: string; cost_usd?: number | null; duration_ms?: number | null }
-  | { type: "approval_required"; turn_id: string; request_id: string; tool_name: string; summary: string; risk: Risk; voice_approvable: boolean; grantable: boolean; detail: string }
+  | ApprovalRequiredEvent
   | { type: "approval_decided"; request_id: string; approved: boolean }
   | { type: "approvals_cleared" }
-  | { type: "sessions"; items: SessionSummary[] }
-  | { type: "session_loaded"; session: (SessionSummary & { claude_session_id: string | null; turns: StoredTurn[] }) | null }
+  /** With workspace: one project's sessions, sent only to the device that asked. */
+  | { type: "sessions"; items: SessionSummary[]; workspace?: string }
+  | { type: "session_loaded"; session: StoredSession | null }
+  | { type: "projects"; items: ProjectInfo[] }
+  /** A review draft was sent or discarded (maybe on another device): close it everywhere. */
+  | { type: "draft_closed"; draft_id: string }
   | { type: "config"; config: Config; rejected?: string[] }
   | { type: "voice_profile"; corrections: Correction[]; vocabulary: string[]; project_terms: string[]; samples: number }
   | { type: "learned"; heard: string; meant: string }
@@ -247,15 +311,15 @@ export type EngineEvent =
   | ({ type: "tablet_status" } & TabletStatus)
   | { type: "tablet_pairing"; url: string; expires_at: number }
   | { type: "engines"; items: EngineInfo[] }
-  | { type: "notice"; message: string }
-  | { type: "error"; code: string; message: string }
+  | { type: "notice"; message: string; nid?: number }
+  | { type: "error"; code: string; message: string; nid?: number }
   | { type: "pong"; t: number }
   // Background tasks
   | ({ type: "tasks" } & TasksSnapshot)
   | { type: "task_update"; task: TaskView }
   | { type: "task_text"; task_id: string; delta: string }
   | { type: "task_activity"; task_id: string; tool: string; path: string | null }
-  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; verification?: Verification }
+  | { type: "task_done"; task_id: string; status: TaskStatus; title: string; engine: AgentEngine; summary: string; error: string; verification?: Verification; nid?: number }
   | TaskApprovalEvent
   | { type: "task_approval_decided"; task_id: string; request_id: string; approved: boolean }
   // Voice feature events
@@ -285,7 +349,10 @@ export type Command =
   | { type: "deny"; request_id: string }
   | { type: "new_session" }
   | { type: "load_session"; session_id: string }
-  | { type: "list_sessions" }
+  | { type: "list_sessions"; workspace?: string }
+  | { type: "list_projects" }
+  | { type: "select_project"; workspace: string }
+  | { type: "resync" }
   | { type: "set_config"; values: Partial<Config> }
   | { type: "get_voice_profile" }
   | { type: "update_correction"; heard: string; meant: string; action: "enable" | "disable" | "delete" }
@@ -303,7 +370,7 @@ export type Command =
   | { type: "audio_clip"; pcm_b64: string }
   | { type: "tablet_pair_start" }
   | { type: "tablet_revoke"; device_id: string }
-  | { type: "task_create"; engine: AgentEngine; instruction: string; lanes: string[]; title?: string | null; checks?: CheckSpec[] | null }
+  | { type: "task_create"; engine: AgentEngine; instruction: string; lanes: string[]; title?: string | null; checks?: CheckSpec[] | null; workspace?: string }
   | { type: "task_discard"; task_id: string }
   | { type: "task_open_folder"; task_id: string }
   | { type: "task_cancel"; task_id: string }

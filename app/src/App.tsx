@@ -29,6 +29,12 @@ export function App() {
       useApp.getState().apply(e);
     });
     const offStatus = client.onStatus((c) => useApp.getState().setConnection(c));
+    // A tablet that slept may have missed events on a socket that stayed open: ask for a
+    // fresh snapshot when it comes back. (A dropped socket reconnects and gets one anyway.)
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && useApp.getState().connection === "open") client.send({ type: "resync" });
+    };
+    document.addEventListener("visibilitychange", onVisible);
     client.start();
     let offShell: (() => void) | undefined;
     let disposed = false;
@@ -45,6 +51,7 @@ export function App() {
       disposed = true;
       offEvent();
       offStatus();
+      document.removeEventListener("visibilitychange", onVisible);
       offShell?.();
       client.stop();
     };

@@ -205,6 +205,28 @@ describe("EngineClient close codes (second review)", () => {
     vi.unstubAllGlobals();
   });
 
+  it("4408 (no first frame in time, e.g. slow Wi-Fi) retries with the same token and keeps the pairing", async () => {
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.open();
+    sockets[0]!.drop(4408);
+    expect(statuses.at(-1)).toBe("closed");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets.length).toBeGreaterThan(1);
+    sockets[1]!.open();
+    expect(JSON.parse(sockets[1]!.sent[0]!)).toEqual({ type: "auth", token: "t" });
+    expect(statuses).not.toContain("unauthorized"); // App forgets the device only on "unauthorized"
+  });
+
+  it("a real token rejection (4401) is terminal and reported as unauthorized", async () => {
+    c.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets[0]!.drop(4401);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(1);
+    expect(statuses.at(-1)).toBe("unauthorized");
+  });
+
   it("1001 (the PC stopped tablet access) reconnects and is not a removal", async () => {
     c.start();
     await vi.advanceTimersByTimeAsync(0);

@@ -490,6 +490,12 @@ _TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=
 _NOT_BUILT = (b"<!doctype html><meta charset=utf-8><title>Barnaby</title>"
               b"<p>Barnaby's tablet page isn't built on this PC. In the app folder run <code>npm run build</code>.</p>")
 FIRST_FRAME_TIMEOUT_S = 10
+# Close codes for the first frame. Only CLOSE_UNAUTHORIZED means the token or code was
+# wrong: the tablet then forgets its pairing, and the address gets a lockout strike.
+# CLOSE_NO_FIRST_FRAME is a slow or dropped connection (Wi-Fi hiccup, phone sleeping):
+# nothing was presented, so nothing is counted, and the tablet retries with its token.
+CLOSE_UNAUTHORIZED = 4401
+CLOSE_NO_FIRST_FRAME = 4408
 # websockets logs every plain-HTTP response (each page file) as "connection rejected" at INFO.
 _WS_LOG = logging.getLogger("barnaby_engine.remote.ws")
 _WS_LOG.setLevel(logging.WARNING)
@@ -739,7 +745,7 @@ class RemoteServer:
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=FIRST_FRAME_TIMEOUT_S)
         except (asyncio.TimeoutError, ConnectionClosed):
-            await ws.close(code=4401, reason="unauthorized")
+            await ws.close(code=CLOSE_NO_FIRST_FRAME, reason="no credentials in time; retry")
             return None
         device_id: str | None = None
         try:
@@ -770,7 +776,7 @@ class RemoteServer:
             device_id = None
         if device_id is None:
             self.lockout.fail(peer)
-            await ws.close(code=4401, reason="unauthorized")
+            await ws.close(code=CLOSE_UNAUTHORIZED, reason="unauthorized")
         return device_id
 
 

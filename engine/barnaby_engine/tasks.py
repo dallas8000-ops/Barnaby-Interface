@@ -462,10 +462,11 @@ class TaskManager:
 
     # ------------------------------------------------------------ commands
     async def create(self, engine: str, instruction: str, lanes: list[str], title: str | None,
-                     checks: list[Any] | None = None) -> TaskRecord | None:
+                     checks: list[Any] | None = None, *, workspace: str | None = None) -> TaskRecord | None:
         """``checks``: None = the project's checks from Settings, a list = this task's own
-        (an empty list means none)."""
-        ws = self.config.workspace
+        (an empty list means none). ``workspace``: the project to work in (default: the
+        current one); the caller has already checked it's a project the PC opened."""
+        ws = workspace or self.config.workspace
         instruction = instruction.strip()
         problem = None
         if self._factory is None:

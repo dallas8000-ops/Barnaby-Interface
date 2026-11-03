@@ -20,6 +20,12 @@ const REFUSED: Record<number, string> = {
 };
 type StatusListener = (status: ConnectionStatus) => void;
 
+/** The token or pairing code was rejected. Only this (and 4403, removed on the PC) makes a
+ *  tablet forget its pairing. */
+export const CLOSE_UNAUTHORIZED = 4401;
+/** No credentials arrived in time (slow Wi-Fi, a tablet waking up): retry with the same token. */
+export const CLOSE_NO_FIRST_FRAME = 4408;
+
 /**
  * WebSocket client with first-frame auth and jittered exponential backoff.
  *
@@ -27,7 +33,8 @@ type StatusListener = (status: ConnectionStatus) => void;
  * hammer the engine. 4000 (replaced by a newer client) is also terminal, so two
  * windows don't ping-pong the single client slot forever. For a tablet, 4403
  * (device removed on the PC) and 4409 (no room to pair) are terminal too, and a
- * missing pairing ("unpaired") never retries.
+ * missing pairing ("unpaired") never retries. 4408 (no first frame in time) is a network
+ * hiccup, not a rejection: it retries with the backoff and keeps the pairing.
  */
 export class EngineClient {
   private ws: WebSocket | null = null;
@@ -135,7 +142,7 @@ export class EngineClient {
         this.listeners.forEach((fn) => fn({ type: "error", code: "connection", message: refused }));
         return;
       }
-      if (ev.code === 4401 || ev.code === 4403 || ev.code === 4409 || ev.code === 4000) {
+      if (ev.code === CLOSE_UNAUTHORIZED || ev.code === 4403 || ev.code === 4409 || ev.code === 4000) {
         this.emitStatus(ev.code === 4000 ? "closed" : "unauthorized");
         return;
       }

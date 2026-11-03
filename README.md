@@ -135,12 +135,29 @@ the tablet and are read by the tablet's own voice. While a tablet is connected t
 quiet. You can approve and decline from the tablet under the same rules as the PC. The PC
 window and a tablet can be connected at the same time.
 
-**What stays on the PC:** the project folder, API keys, the microphone, hands-free, tablet
-access and pairing. The tablet can't change them, and the engine enforces this, not just the
-UI. A tablet can open past sessions of the current project only.
+**The PC and the tablet share everything.** Both show the same conversation, the same task
+board and the same live activity, and an action on either one shows up on the other at once.
+From the tablet you can:
+- switch between the projects you've opened on the PC (the project picker in the sidebar), and
+  browse and open past sessions of any of them;
+- start tasks in any of those projects, with their folders and saved lanes, and follow them up,
+  cancel them, and approve or decline their requests;
+- pick up where the PC is. A tablet that connects or wakes up mid-turn gets the conversation,
+  the reply so far, any card waiting for approval, chain progress, task activity, and the
+  notifications it missed.
+
+Each approval and each voice draft counts once. If the PC and the tablet answer the same card,
+the first answer wins, the card closes on both, and the other device is told it was already
+decided. The engine enforces this, so a decision can't be applied twice.
+
+**What stays on the PC:** choosing a new project folder, API keys, the microphone, hands-free,
+tablet access and pairing. The tablet picks only from projects the PC has already opened; it
+can't type in a folder path. The engine enforces all of this, not just the UI.
 
 **Removing a tablet:** Settings → Tablet access → **Remove**. Its connection closes at once and
-its key stops working.
+its key stops working. That, or a key the PC no longer accepts, is the only thing that makes a
+tablet forget its pairing. A slow or dropped Wi-Fi connection just reconnects with the same key,
+so you don't have to pair again.
 
 **How it's protected:**
 - Off by default. The tablet port only listens while tablet access is on.
@@ -148,8 +165,9 @@ its key stops working.
 - Only paired devices get in. Each has a random 256-bit token; the PC stores only its SHA-256
   hash. Pairing codes are single-use, expire in 5 minutes, and travel in the URL fragment, so
   they're never sent in a request line.
-- Five failed attempts from one address lock it out for 10 minutes. Unauthenticated
-  connections are capped, and limited to 4 KB until they authenticate.
+- Five failed attempts from one address lock it out for 10 minutes. Only a wrong key or code
+  counts as a failure; a connection that sends nothing in time (slow Wi-Fi) is closed without
+  counting. Unauthenticated connections are capped, and limited to 4 KB until they authenticate.
 - Only private (home-network) addresses may connect. Barnaby refuses to start tablet access
   while Windows marks your network as Public, and the firewall rule only opens the port on
   Private networks.
