@@ -24,7 +24,7 @@ export function App() {
   useEffect(() => {
     const speech = remote ? getTabletSpeech((speaking) => useApp.setState({ tabletSpeaking: speaking })) : null;
     const offEvent = client.onEvent((e) => {
-      if (speech && e.type === "say") speech.say(e.text);
+      if (speech && e.type === "say") speech.say(e.text, e.lang);
       else if (speech && e.type === "say_stop") speech.stop();
       useApp.getState().apply(e);
     });

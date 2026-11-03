@@ -25,6 +25,8 @@ voice = [
     # model on first load, inside the running engine. Pin it here instead.
     "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
+# Japanese and Chinese replies: Kokoro's G2P for those languages (Settings -> Language).
+languages = ["misaki[ja]>=0.9.4", "misaki[zh]>=0.9.4"]
 dev = ["ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]

@@ -83,11 +83,13 @@ class Backends:
     transcriber_factory: Callable[[Config], Any] | None = None
     speaker_factory: Callable[[Config], Any] | None = None
     claude_auth: Any = None
+    stt_installed: Callable[[], dict[str, bool]] | None = None
     tablet_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 def real_backends(config: Config) -> Backends:
-    from .voice import KokoroSpeaker, MicRecorder, WhisperTranscriber
+    from .languages import WHISPER_MODELS
+    from .voice import KokoroSpeaker, MicRecorder, WhisperTranscriber, whisper_installed
     vault = Vault()
 
     def devin_key() -> str | None:
@@ -98,7 +100,7 @@ def real_backends(config: Config) -> Backends:
             return None
 
     def tfactory(c: Config) -> WhisperTranscriber:
-        return WhisperTranscriber(c.whisper_model, c.whisper_device)
+        return WhisperTranscriber(c.whisper_model, c.whisper_device, c.spoken_language)
 
     def sfactory(c: Config) -> KokoroSpeaker:
         return KokoroSpeaker(c.tts_voice, c.tts_speed)
@@ -134,6 +136,7 @@ def real_backends(config: Config) -> Backends:
         transcriber_factory=tfactory,
         speaker_factory=sfactory,
         claude_auth=ClaudeAuth(config.claude_bin),
+        stt_installed=lambda: {m: whisper_installed(m) for m in WHISPER_MODELS},
     )
 
 
@@ -170,7 +173,7 @@ async def amain(args: argparse.Namespace,
                         engine_available=be.available, templates=template_manager, workflows=workflow_engine,
                         emit=bridge.emit,
                         transcriber_factory=be.transcriber_factory, speaker_factory=be.speaker_factory,
-                        vault=be.vault, emit_desktop=bridge.emit_desktop, claude_auth=be.claude_auth,
+                        vault=be.vault, emit_desktop=bridge.emit_desktop, claude_auth=be.claude_auth, stt_installed=be.stt_installed,
                         task_agent_factory=be.task_factory,
                         task_forget=lambda tid: shutil.rmtree(data_dir() / "cursor-tasks" / tid, ignore_errors=True),
                         tablet_factory=lambda port, on_change: RemoteServer(

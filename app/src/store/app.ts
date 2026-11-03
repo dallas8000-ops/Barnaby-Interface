@@ -87,6 +87,8 @@ export interface AppState {
   level: number;
   speaking: boolean;
   components: Record<"stt" | "tts", { status: ComponentStatus; detail?: string }>;
+  /** Recognition models already downloaded on the PC (empty until the engine reports). */
+  sttInstalled: Record<string, boolean>;
   config: Config | null;
   engines: EngineInfo[];
   secrets: Record<SecretName, boolean>;
@@ -146,6 +148,7 @@ export const initialState: AppState = {
   level: 0,
   speaking: false,
   components: { stt: { status: "loading" }, tts: { status: "loading" } },
+  sttInstalled: {},
   config: null,
   engines: [{ name: "claude", available: true }],
   secrets: { devin: false },
@@ -344,6 +347,7 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
         projects: e.projects ?? s.projects,
         speaking: e.speaking,
         components: e.components ?? s.components,
+        sttInstalled: e.stt_installed ?? s.sttInstalled,
       };
     }
     case "tasks":
@@ -383,6 +387,8 @@ export function reduceEvent(s: AppState, e: EngineEvent): AppState {
       return { ...s, level: e.rms };
     case "speaking":
       return { ...s, speaking: e.active };
+    case "stt_models":
+      return { ...s, sttInstalled: e.installed };
     case "component":
       return { ...s, components: { ...s.components, [e.name]: { status: e.status, detail: e.detail } } };
     case "transcript":

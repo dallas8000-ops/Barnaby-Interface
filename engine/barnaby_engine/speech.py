@@ -10,7 +10,12 @@ import re
 
 from .safety import redact_for_speech
 
-_SENTENCE_END = re.compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(\[])|\n{2,}")
+# Sentence ends: Latin ". " before a capital (or ¿ ¡ or a non-Latin letter), the
+# Hindi danda, and CJK 。！？ which need no space after them.
+_SENTENCE_END = re.compile(
+    r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(\[¿¡À-ÖØ-Þऀ-ॿ぀-ヿ一-鿿])"
+    r"|(?<=[।॥])\s*|(?<=[。！？])[」』）\"']*\s*|\n{2,}")
+_LETTER = re.compile(r"[^\W\d_]")  # a letter in any script: there is something to say
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _INLINE_CODE = re.compile(r"`([^`]{1,40})`")
 _LONG_INLINE_CODE = re.compile(r"`[^`]{41,}`")
@@ -38,8 +43,9 @@ def _clean(sentence: str) -> str:
 
 
 class SpeechComposer:
-    def __init__(self, max_chars: int = 700) -> None:
+    def __init__(self, max_chars: int = 700, overflow_note: str = OVERFLOW_NOTE) -> None:
         self.max_chars = max_chars
+        self.overflow_note = overflow_note
         self._buf = ""
         self._in_fence = False
         self._spoken = 0
@@ -86,12 +92,17 @@ class SpeechComposer:
 
     def _accept(self, raw: str) -> list[str]:
         text = _clean(raw)
-        if not text or not re.search(r"[A-Za-z]", text):
+        if not text or not _LETTER.search(text):
             return []
         if self._overflowed:
             return []
         if self._spoken + len(text) > self.max_chars:
             self._overflowed = True
-            return [OVERFLOW_NOTE] if self._spoken else [text[: self.max_chars].rsplit(" ", 1)[0] + ".", OVERFLOW_NOTE]
+            if self._spoken:
+                return [self.overflow_note]
+            head = text[: self.max_chars]
+            head = head.rsplit(" ", 1)[0] if " " in head else head  # CJK has no spaces to cut at
+            stop = "。" if re.match(r"[぀-ヿ一-鿿]", head[-1:]) else "."
+            return [head + stop, self.overflow_note]
         self._spoken += len(text)
         return [text]
